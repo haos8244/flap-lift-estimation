@@ -209,3 +209,75 @@ This closes the loop and ensures that every configuration in the trade study is 
 
 - Federal Aviation Administration. *14 CFR Part 25 — Airworthiness Standards: Transport Category Airplanes.* Sections 25.107, 25.125, 25.143.
 - Roskam, J. *Airplane Design Part VI.* Chapter 8, Sections 8.1.2–8.1.3 (empirical $\Delta c_{l,max}$ methods).
+
+---
+ 
+## Future Work: Drag Estimation for High-Lift Configurations
+ 
+### Current Limitation
+ 
+The current trade study evaluates candidate flap/slat configurations solely on whether they produce sufficient $C_L$ to meet the takeoff and landing requirements. No drag estimate is computed. This means a configuration can pass the $C_L$ check but produce so much drag that the aircraft cannot meet the FAR 25.111 second-segment climb gradient requirement after takeoff, or that landing field length becomes excessive. Without drag, the trade study cannot distinguish between configurations that produce the same $C_L$ but at different drag penalties — and it cannot verify climb performance.
+ 
+### What Is Needed
+ 
+Roskam Part VI Section 4.6 (Eq. 4.70) decomposes the total drag increment due to flap deflection into three components:
+ 
+$$\Delta C_{D,flap} = \Delta C_{D_{p,flap}} + \Delta C_{D_{i,flap}} + \Delta C_{D_{int,flap}}$$
+ 
+Each component requires its own estimation method:
+ 
+**1. Profile Drag Increment** $\Delta C_{D_{p,flap}}$
+ 
+This is the increase in pressure and friction drag from the deflected flap surfaces. Roskam Eq. 4.71 gives:
+ 
+$$\Delta C_{D_{p,flap}} = \Delta c_{d_p} \cdot \frac{S_{w_f}}{S_{ref}} \cdot K_{\Lambda}$$
+ 
+where $\Delta c_{d_p}$ is the 2D section profile drag increment, $S_{w_f}/S_{ref}$ is the flapped wing area ratio, and $K_{\Lambda}$ is a sweep correction. The 2D increment depends on flap type and deflection angle, obtained from empirical charts: Figure 4.44 (plain flaps), Figure 4.45 (split flaps), Figure 4.46 (single-slotted flaps), and Figure 4.47 (Fowler flaps). For the Fowler flap used in this project, Figure 4.47 provides $\Delta c_{d_p}$ as a function of $\delta_f$ and $c_f/c$.
+ 
+Implementation would follow the same pattern as the lift estimation: digitize the relevant figure into a MATLAB interpolation table and look up $\Delta c_{d_p}$ for each configuration in the trade study loop. The flapped area ratio $S_{w_f}/S_{ref}$ can be computed from the same spanwise flap extent already defined in the script.
+ 
+**2. Induced Drag Increment** $\Delta C_{D_{i,flap}}$
+ 
+Deploying partial-span flaps distorts the spanwise loading away from the elliptical distribution, increasing induced drag beyond what the simple $C_L^2 / (\pi \cdot AR \cdot e)$ formula predicts for the clean wing. The induced drag increment can be estimated from:
+ 
+$$\Delta C_{D_{i,flap}} = \frac{(\Delta C_L)^2}{\pi \cdot AR \cdot e_{flap}}$$
+ 
+where $e_{flap}$ is the Oswald efficiency factor with flaps deployed, which is lower than the clean-wing value due to the non-elliptical loading. Roskam Section 4.6.2 provides methods to estimate this. Alternatively, since the script already constructs the modified spanwise loading curve, $e_{flap}$ could be computed directly from the Fourier decomposition of the modified circulation distribution — though this adds complexity.
+ 
+A simpler approach for preliminary design is to use the total modified $C_L$ (already computed) with a reduced Oswald factor. Typical values for $e_{flap}$ are 0.5–0.7 for partial-span Fowler flaps versus 0.75–0.85 clean. The difference in induced drag between the flapped and clean loading gives $\Delta C_{D_{i,flap}}$.
+ 
+**3. Interference Drag Increment** $\Delta C_{D_{int,flap}}$
+ 
+This accounts for drag from the gaps between the slat and wing leading edge, and between the wing trailing edge and flap. For slotted flaps and slats, the slot geometry creates local flow acceleration and mixing losses. Roskam Section 4.6.3 provides empirical corrections for this, though it is typically the smallest of the three components. For preliminary design, it can be approximated as a fraction of the profile drag increment or absorbed into the profile drag empirical data, which already includes some slot effects for slotted flap types.
+ 
+### Why This Matters: Climb Gradient Check
+ 
+FAR 25.111 requires a minimum second-segment climb gradient with one engine inoperative, landing gear retracted, and takeoff flaps deployed. For a twin-engine aircraft:
+ 
+$$\gamma_{min} = 0.024 \quad (2.4\%)$$
+ 
+The climb gradient is:
+ 
+$$\gamma = \frac{T_{OEI}}{W} - \frac{C_D}{C_L}$$
+ 
+where $T_{OEI}$ is the thrust available with one engine inoperative (approximately 50% of total takeoff thrust) and $C_D = C_{D,clean} + \Delta C_{D,flap}$. A configuration that meets $C_{L,req}$ but produces excessive flap drag may fail this climb requirement — particularly at higher deflection angles where profile drag grows rapidly with $\delta_f$.
+ 
+Adding the drag estimate to the trade study enables a combined check: each configuration must simultaneously meet the $C_L$ requirement *and* the climb gradient requirement. This would filter out high-deflection configurations that produce enough lift but too much drag, and would shift the optimal design point toward lower deflection angles with larger chord ratios — consistent with the Fowler flap philosophy of gaining lift through chord extension rather than excessive deflection.
+ 
+### Implementation
+ 
+For each configuration in the existing trade study loop:
+ 
+1. Look up $\Delta c_{d_p}$ from the digitized Fowler flap profile drag chart (Figure 4.47) at the current $c_f/c$ and $\delta_f$.
+2. Compute $\Delta C_{D_{p,flap}}$ using the flapped area ratio and sweep correction.
+3. Compute $\Delta C_{D_{i,flap}}$ from $\Delta C_L$ and an estimated $e_{flap}$.
+4. Sum the drag increments and add to the clean-wing $C_{D,0}$ (from VSPAERO or a separate drag buildup).
+5. Compute $L/D$ and the climb gradient $\gamma$.
+6. Check $\gamma \geq 0.024$ (twin-engine) in addition to the existing $C_L \geq C_{L,req}$ check.
+ 
+This requires digitizing one additional chart (Figure 4.47) and obtaining a clean-wing $C_{D,0}$ estimate, but otherwise integrates directly into the existing loop structure. The output table would then include $\Delta C_D$, $L/D$, and the climb gradient for each configuration, enabling a fully informed design selection.
+ 
+### References
+ 
+- Roskam, J. *Airplane Design Part VI: Preliminary Calculation of Aerodynamic, Thrust and Power Characteristics.* Section 4.6, Eq. 4.70–4.73, Figures 4.44–4.47.
+- Federal Aviation Administration. *14 CFR Part 25 — Airworthiness Standards: Transport Category Airplanes.* Section 25.111 (Climb: one-engine-inoperative).
