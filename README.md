@@ -112,52 +112,6 @@ Where:
 
 All units are English: lbs, ft, slug/ft³, knots (converted to ft/s internally). Angles are in degrees externally, converted to radians where equations require it.
 
-## Future Work: Integration of 3D Flap Effectiveness Corrections
-
-### Current Approach
-
-The current implementation computes the lift increment from flaps and slats using Roskam Part VI 2D airfoil-level equations (Eq. 8.6 for Fowler flaps, Eq. 8.15 for leading edge slats). The 2D section increment $\Delta c_l$ is added directly to the clean spanwise loading curve from VSPAERO over the flapped/slatted span stations, with a $\cos\Lambda_{HL}$ sweep correction applied. The modified loading curve is then re-integrated using trapezoidal integration to obtain the wing-level $\Delta C_L$.
-
-This approach replaces Roskam's flap span factor $K_b$ (Figure 8.52) with a direct spanwise integration, which is arguably more accurate for the multi-section complex wing planform used in this project since $K_b$ was derived for simple trapezoidal wings. The clean-wing VSPAERO loading already contains 3D finite wing effects (induced downwash, tip effects, planform shape), so the baseline is physically correct.
-
-### What Is Assumed
-
-The current method assumes that the incremental effect of deploying a flap or slat can be treated as a 2D perturbation applied on top of a 3D baseline loading. Specifically, it assumes:
-
-1. The 2D flap effectiveness parameter $\alpha_\delta$ (Figure 8.17) applies directly at each spanwise station without correction for 3D mutual induction between flapped and unflapped wing sections.
-2. The 2D airfoil lift curve slope $c_{l_\alpha}$ is used in the flap equations without adjusting for the reduced lift curve slope of the finite wing.
-3. Local flow at each section responds to the flap deflection the same way a pure 2D airfoil would, neglecting spanwise flow and vortex interactions at the flap edges.
-
-For a high-aspect-ratio transport wing where the flow is predominantly two-dimensional at each section away from the tips, these are reasonable preliminary design assumptions. However, they result in a slight overestimation of flap effectiveness.
-
-### Proposed Improvement
-
-Roskam Eq. 8.27 provides the formal 2D-to-3D conversion:
-
-$$\Delta C_{L_W} = K_b \cdot (\Delta c_l) \cdot \frac{C_{L_{\alpha_W}}}{c_{l_\alpha}} \cdot \frac{(\alpha_\delta)_{C_L}}{(\alpha_\delta)_{c_l}}$$
-
-Rather than adopting this equation wholesale (which would replace the spanwise integration with $K_b$, a step backward for the complex wing), two correction factors from Eq. 8.27 can be selectively integrated into the current method:
-
-**1. Lift Curve Slope Ratio** $C_{L_{\alpha_W}} / c_{l_\alpha}$
-
-This ratio corrects for the fact that a finite wing has a lower lift curve slope than its 2D airfoil sections due to induced downwash. The 2D value $c_{l_\alpha} \approx 2\pi$ rad$^{-1}$ is currently used uncorrected. The 3D wing lift curve slope $C_{L_{\alpha_W}}$ can be computed from Helmbold's equation or extracted directly from VSPAERO results (slope of $C_L$ vs. $\alpha$ in the linear region). For the aspect ratio of this aircraft, the ratio is expected to be approximately 0.85--0.92. This correction requires no additional chart digitization — both values are already available from existing data.
-
-**2. 3D Flap Effectiveness Ratio** $(\alpha_\delta)_{C_L} / (\alpha_\delta)_{c_l}$
-
-This ratio accounts for the reduction in flap effectiveness caused by 3D effects: spanwise flow, mutual induction between flapped and unflapped sections, and tip vortex interactions at flap edges. It is obtained from Roskam Figure 8.53 as a function of aspect ratio and inboard/outboard flap span ratios. Implementing this correction requires digitizing Figure 8.53 into a 2D interpolation table (similar to what was done for Figures 8.17 and 8.26), after which it becomes a single `interp2` call per configuration in the trade study loop.
-
-### Implementation
-
-The corrected section-level increment applied at each spanwise station would become:
-
-$$\Delta c_l^{corrected} = \Delta c_l^{2D} \cdot \frac{C_{L_{\alpha_W}}}{c_{l_\alpha}} \cdot \frac{(\alpha_\delta)_{C_L}}{(\alpha_\delta)_{c_l}} \cdot \cos\Lambda_{HL}$$
-
-This preserves the direct spanwise integration (superior to $K_b$ for the complex wing) while incorporating the two physics corrections that the current method omits. The net effect is expected to reduce the predicted $\Delta C_L$ by approximately 8--15%, yielding a more conservative and physically accurate result. Configurations that still meet $C_{L,req}$ after applying these corrections carry stronger design confidence.
-
-### References
-
-- Roskam, J. *Airplane Design Part VI: Preliminary Calculation of Aerodynamic, Thrust and Power Characteristics.* Section 8.1.4.1, Eq. 8.27, Figures 8.52--8.53.
-
 ---
 
 ## Future Work: Integration of 3D Flap Effectiveness Corrections
