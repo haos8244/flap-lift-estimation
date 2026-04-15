@@ -4,7 +4,68 @@
 
 clc; clear; close all
 
-%% Emperical Data - Figure 8.17 - Fowler Flaps for Eq 8.6
+%% Emperical Data - Figure 8.53 - Flap Effectiveness with AR + cf/c Eq 8.27
+
+alphaDeltacf = [0.00, 0.20, 0.40, 0.55, 0.60, 0.75, 0.80, 0.90, 0.95, 1.00];
+cfOverCratio = [0.00, 0.05, 0.10, 0.20, 0.25, 0.40, 0.45, 0.60, 0.80, 1.00];
+
+% cf/c = 0.1
+AR01 = [1.416, 1.645, 2.014, 2.400, 2.892, 3.628, 4.766, 6.516, 8.020, 9.996];
+alphaDeltaRatio01 = [2.000, 1.903, 1.802, 1.700, 1.603, 1.501, 1.404, 1.305, 1.250, 1.203];
+
+% cf/c = 0.2
+AR02 = [0.577, 0.701, 0.843, 1.107, 1.493, 2.002, 2.755, 3.998, 6.010, 8.022, 10.015];
+alphaDeltaRatio02 = [2.000, 1.903, 1.802, 1.702, 1.601, 1.501, 1.405, 1.302, 1.201, 1.158, 1.138];
+
+% cf/c = 0.3
+AR03 = [0.280, 0.316, 0.406, 0.530, 0.759, 1.110, 1.654, 2.565, 4.000, 6.029, 8.023, 10.016];
+alphaDeltaRatio03 = [2.000, 1.901, 1.797, 1.700, 1.600, 1.501, 1.402, 1.302, 1.203, 1.145, 1.111, 1.095];
+
+% cf/c = 0.4
+AR04 = [0.054, 0.126, 0.215, 0.357, 0.603, 0.989, 1.603, 2.689, 4.018, 6.012, 8.006, 10.016];
+alphaDeltaRatio04 = [1.903, 1.801, 1.700, 1.601, 1.499, 1.402, 1.302, 1.203, 1.147, 1.102, 1.078, 1.066];
+
+% cf/c = 0.5
+AR05 = [0.023, 0.129, 0.253, 0.500, 0.921, 1.815, 3.005, 4.019, 5.034, 6.030, 8.041, 9.999];
+alphaDeltaRatio05 = [1.700, 1.600, 1.503, 1.405, 1.305, 1.203, 1.133, 1.106, 1.083, 1.072, 1.056, 1.049];
+
+% cf/c = 0.6
+AR06 = [0.009, 0.168, 0.467, 1.028, 2.026, 3.040, 5.016, 8.006, 10.017];
+alphaDeltaRatio06 = [1.499, 1.404, 1.302, 1.201, 1.135, 1.095, 1.060, 1.036, 1.032];
+
+% cf/c = 0.7
+AR07 = [-0.007, 0.100, 0.521, 1.781, 4.020, 6.013, 8.007, 10.000];
+alphaDeltaRatio07 = [1.402, 1.305, 1.201, 1.101, 1.051, 1.034, 1.024, 1.022];
+
+% cf/c = 0.8
+AR08 = [-0.004, 0.977, 2.027, 5.017, 8.007, 9.982];
+alphaDeltaRatio08 = [1.201, 1.099, 1.058, 1.022, 1.017, 1.010];
+
+% cf/c = 0.9 (and 1.0 — same data)
+AR09 = [-0.002, 1.013, 2.587, 6.014, 10.017];
+alphaDeltaRatio09 = [1.104, 1.048, 1.022, 1.010, 1.005];
+
+% Post Processing
+ARraw = {AR01, AR02, AR03, AR04, AR05, AR06, AR07, AR08, AR09};
+ratioRaw = {alphaDeltaRatio01, alphaDeltaRatio02, alphaDeltaRatio03, ...
+            alphaDeltaRatio04, alphaDeltaRatio05, alphaDeltaRatio06, ...
+            alphaDeltaRatio07, alphaDeltaRatio08, alphaDeltaRatio09};
+
+cfcValues = 0.1:0.1:0.9;
+ARcommon = linspace(1, 20, 100);
+ratioTable = zeros(length(cfcValues), length(ARcommon));
+
+for i = 1:length(cfcValues)
+    ar = ARraw{i};
+    ar(ar < 0.01) = 0.01;
+    ratioTable(i, :) = interp1(ar, ratioRaw{i}, ARcommon, ...
+        'linear', 'extrap');
+end
+
+ratioTable(ratioTable < 1.0) = 1.0;
+[ARgrid, cfcGrid] = meshgrid(ARcommon, cfcValues);
+
+%% Emperical Data - Figure 8.17 - Fowler Flaps Eq 8.6
 
 alphaDelta40 = [0.60, 0.60, 0.60, 0.59, 0.58, 0.57, 0.55, 0.52, 0.49];
 alphaDelta30 = [0.55, 0.55, 0.54, 0.53, 0.52, 0.51, 0.50, 0.48, 0.44];
@@ -81,6 +142,14 @@ aileronLength = 0.15; % eta normalized already (% of single wing span)
 
 airDensity = 0.002378;
 
+ARdesign = 15;
+
+alphaDeltaRatio3Dflap = interp2(ARgrid, cfcGrid, ratioTable, ...
+    ARdesign, cfOverCFlapDesign, 'linear');
+
+alphaDeltaRatio3Dslat = interp2(ARgrid, cfcGrid, ratioTable, ...
+    ARdesign, cfOverCSlatDesign, 'linear');
+
 aoaTO = 10;
 VLOF = 1.1 * 140;
 WTO = 163800;
@@ -140,6 +209,11 @@ CLcleanLD = ComputeCL( ...
     etaDistroLD, ...
     VSP.cRef ...
 );
+
+%% Step 2b: Compute Clean Wing Lift Curve Slope + Wing Lift Increment
+
+CLalphaWing = (abs(CLcleanTO - CLcleanLD)) ...
+                / (abs(aoaTO - aoaLD) * (pi/180));
 
 %% Step 3: Required CL
 
@@ -214,7 +288,10 @@ for i = 1:length(deltaFlapsInterp) % flap deflection
             clDeltaSlatDesign, ...
             deltaSlats, ...
             cPrimeOverCSlat, ...
-            LeadingEdgeSweep ...
+            LeadingEdgeSweep, ...
+            alphaDeltaRatio3Dflap, ...
+            alphaDeltaRatio3Dslat, ...
+            CLalphaWing ...
         );
 
         modLD = ModifiedCLDistro( ...
@@ -234,7 +311,10 @@ for i = 1:length(deltaFlapsInterp) % flap deflection
             clDeltaSlatDesign, ...
             deltaSlats, ...
             cPrimeOverCSlat, ...
-            LeadingEdgeSweep ...
+            LeadingEdgeSweep, ...
+            alphaDeltaRatio3Dflap, ...
+            alphaDeltaRatio3Dslat, ...
+            CLalphaWing ...
         );
 
         CLTO = ComputeCL(VSP.b, VSP.sRef, modTO, etaDistroTO, VSP.cRef);
