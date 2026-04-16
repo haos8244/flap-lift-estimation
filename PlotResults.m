@@ -217,6 +217,173 @@ function PlotResults(results, VSP, ac, clean)
     
     sgtitle('Stall Margins by Phase');
 
+    %% ===== Figure 5: Linearized CL-alpha lift curves =====
+    PlotLiftCurves(results, clean);
+
+end
+
+function PlotLiftCurves(results, clean)
+% PLOTLIFTCURVES  Linearized CL-alpha diagram for clean, best-TO, best-LD.
+%
+%   Shows the straight-line lift curves up to their respective stall peaks,
+%   with operating points marked. Illustrates the Fig. 8.58 construction:
+%   how devices shift the curve up (ΔCL_w) and move the peak left/right.
+
+    bestTO = results.bestTO;
+    bestLD = results.bestLD;
+    if isempty(bestTO) || isempty(bestLD)
+        warning('Need both best-TO and best-LD to plot lift curves.');
+        return;
+    end
+
+    % --- Clean wing ---
+    CLa_clean    = clean.CLalpha_W;           % /rad
+    CLa_clean_dg = CLa_clean * pi/180;        % /deg
+    aStall_clean = clean.alphaStall;           % deg
+    CLmax_clean  = clean.CLmax_W;
+
+    % Zero-lift alpha (back-extrapolate)
+    a0_clean = aStall_clean - CLmax_clean / CLa_clean_dg;
+
+    % --- Best TO ---
+    iTO = find(results.deltaSweep == bestTO.df);
+    CLa_TO_rad   = results.CLalphaFlappedGrid(iTO, ...
+                       find(results.deltaSweep == bestTO.ds));
+    CLa_TO_dg    = CLa_TO_rad * pi/180;
+    aStall_TO    = bestTO.alphaStall;
+    CLmax_TO     = bestTO.CLmax;
+    dCLw_TO      = results.deltaCLw_grid(iTO, ...
+                       find(results.deltaSweep == bestTO.ds));
+    a0_TO        = aStall_TO - CLmax_TO / CLa_TO_dg;
+
+    % --- Best LD ---
+    iLD = find(results.deltaSweep == bestLD.df);
+    CLa_LD_rad   = results.CLalphaFlappedGrid(iLD, ...
+                       find(results.deltaSweep == bestLD.ds));
+    CLa_LD_dg    = CLa_LD_rad * pi/180;
+    aStall_LD    = bestLD.alphaStall;
+    CLmax_LD     = bestLD.CLmax;
+    dCLw_LD      = results.deltaCLw_grid(iLD, ...
+                       find(results.deltaSweep == bestLD.ds));
+    a0_LD        = aStall_LD - CLmax_LD / CLa_LD_dg;
+
+    % --- Build alpha ranges for each curve ---
+    aMin = min([a0_clean, a0_TO, a0_LD]) - 1;
+
+    a_clean = linspace(a0_clean, aStall_clean, 100);
+    CL_clean = CLa_clean_dg .* (a_clean - a0_clean);
+
+    a_TO = linspace(a0_TO, aStall_TO, 100);
+    CL_TO = CLa_TO_dg .* (a_TO - a0_TO);
+
+    a_LD = linspace(a0_LD, aStall_LD, 100);
+    CL_LD = CLa_LD_dg .* (a_LD - a0_LD);
+
+    % --- Plot ---
+    figure('Position', [150 150 900 650]);
+    hold on;
+
+    % Curves
+    hClean = plot(a_clean, CL_clean, 'b-', 'LineWidth', 2);
+    hTO    = plot(a_TO, CL_TO, 'r-', 'LineWidth', 2);
+    hLD    = plot(a_LD, CL_LD, 'm-', 'LineWidth', 2);
+
+    % Stall peaks (filled circles)
+    plot(aStall_clean, CLmax_clean, 'bo', 'MarkerSize', 10, ...
+        'MarkerFaceColor', 'b');
+    plot(aStall_TO, CLmax_TO, 'ro', 'MarkerSize', 10, ...
+        'MarkerFaceColor', 'r');
+    plot(aStall_LD, CLmax_LD, 'mo', 'MarkerSize', 10, ...
+        'MarkerFaceColor', 'm');
+
+    % Operating points — projected onto linearized curves
+    CL_op_TO_on_line = CLa_TO_dg * (bestTO.alphaTrim - a0_TO);
+    CL_op_LD_on_line = CLa_LD_dg * (bestLD.alphaTrim - a0_LD);
+
+    plot(bestTO.alphaTrim, CL_op_TO_on_line, 'rp', 'MarkerSize', 16, ...
+        'MarkerFaceColor', 'r', 'LineWidth', 1.5);
+    plot(bestLD.alphaTrim, CL_op_LD_on_line, 'mp', 'MarkerSize', 16, ...
+        'MarkerFaceColor', 'm', 'LineWidth', 1.5);
+
+    % Dashed lines from operating point up to stall (margin visualization)
+    plot([bestTO.alphaTrim bestTO.alphaTrim], ...
+         [0 CLa_TO_dg*(bestTO.alphaTrim - a0_TO)], ...
+         'r:', 'LineWidth', 1);
+    plot([aStall_TO aStall_TO], [0 CLmax_TO], 'r:', 'LineWidth', 1);
+
+    plot([bestLD.alphaTrim bestLD.alphaTrim], ...
+         [0 CLa_LD_dg*(bestLD.alphaTrim - a0_LD)], ...
+         'm:', 'LineWidth', 1);
+    plot([aStall_LD aStall_LD], [0 CLmax_LD], 'm:', 'LineWidth', 1);
+
+    % Stall margin arrows
+    yArrow_TO = CLmax_TO * 0.95;
+    annotation_arrow(bestTO.alphaTrim, aStall_TO, yArrow_TO, 'r');
+
+    yArrow_LD = CLmax_LD * 0.6;
+    annotation_arrow(bestLD.alphaTrim, aStall_LD, yArrow_LD, 'm');
+
+    % Delta CL_w annotation — at the TO operating alpha
+    aRef = bestTO.alphaTrim;
+    CL_clean_at_ref = CLa_clean_dg * (aRef - a0_clean);
+    CL_TO_at_ref    = CLa_TO_dg * (aRef - a0_TO);
+    if aRef > a0_clean && aRef < aStall_clean
+        plot([aRef aRef], [CL_clean_at_ref CL_TO_at_ref], ...
+            'k-', 'LineWidth', 1.5);
+        text(aRef + 0.3, (CL_clean_at_ref + CL_TO_at_ref)/2, ...
+            sprintf('\\DeltaC_{L,w} = %.3f', dCLw_TO), ...
+            'FontSize', 9, 'Color', 'k');
+    end
+
+    % Labels at stall peaks
+    text(aStall_clean + 0.3, CLmax_clean, ...
+        sprintf('Clean (%.2f°, %.3f)', aStall_clean, CLmax_clean), ...
+        'Color', 'b', 'FontSize', 9, 'FontWeight', 'bold');
+    text(aStall_TO + 0.3, CLmax_TO, ...
+        sprintf('TO (%.2f°, %.3f)', aStall_TO, CLmax_TO), ...
+        'Color', 'r', 'FontSize', 9, 'FontWeight', 'bold');
+    text(aStall_LD + 0.3, CLmax_LD, ...
+        sprintf('LD (%.2f°, %.3f)', aStall_LD, CLmax_LD), ...
+        'Color', [0.6 0 0.6], 'FontSize', 9, 'FontWeight', 'bold');
+
+    % Operating point labels
+    text(bestTO.alphaTrim - 2, CL_op_TO_on_line + 0.05, ...
+        sprintf('\\alpha_{op}=%.1f°\nC_{L,op}=%.3f', ...
+            bestTO.alphaTrim, bestTO.CL_op), ...
+        'Color', 'r', 'FontSize', 8);
+    text(bestLD.alphaTrim + 0.5, CL_op_LD_on_line + 0.05, ...
+        sprintf('\\alpha_{op}=%.1f°\nC_{L,op}=%.3f', ...
+            bestLD.alphaTrim, bestLD.CL_op), ...
+        'Color', 'm', 'FontSize', 8);
+
+    % Formatting
+    xlabel('\alpha (deg)', 'FontSize', 12);
+    ylabel('C_L', 'FontSize', 12);
+    title(sprintf(['Linearized C_L–\\alpha  |  Clean vs Best TO ' ...
+        '(\\delta_f=%d°/\\delta_s=%d°) vs Best LD ' ...
+        '(\\delta_f=%d°/\\delta_s=%d°)'], ...
+        bestTO.df, bestTO.ds, bestLD.df, bestLD.ds));
+
+    legend([hClean hTO hLD], ...
+        {sprintf('Clean (C_{L\\alpha}=%.2f/rad)', CLa_clean), ...
+         sprintf('TO flapped (C_{L\\alpha}=%.2f/rad)', CLa_TO_rad), ...
+         sprintf('LD flapped (C_{L\\alpha}=%.2f/rad)', CLa_LD_rad)}, ...
+        'Location', 'northwest', 'FontSize', 9);
+
+    xlim([aMin-1  max([aStall_clean, aStall_TO, aStall_LD])+3]);
+    ylim([0  max([CLmax_clean, CLmax_TO, CLmax_LD])*1.1]);
+    grid on;
+    hold off;
+end
+
+% --- Helper: draw horizontal double-arrow for stall margin ---
+function annotation_arrow(x1, x2, y, col)
+    plot([x1 x2], [y y], '-', 'Color', col, 'LineWidth', 1.5);
+    plot(x1, y, '<', 'Color', col, 'MarkerSize', 6, 'MarkerFaceColor', col);
+    plot(x2, y, '>', 'Color', col, 'MarkerSize', 6, 'MarkerFaceColor', col);
+    text((x1+x2)/2, y + 0.03, sprintf('%.1f°', x2-x1), ...
+        'HorizontalAlignment', 'center', 'Color', col, ...
+        'FontSize', 9, 'FontWeight', 'bold');
 end
 
 % =====================================================================
