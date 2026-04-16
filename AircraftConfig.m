@@ -23,12 +23,13 @@ function [ac] = AircraftConfig()
     ac.wing = wing;
 
     %% Airfoil Properties (per wing section, inboard to outboard)
-    %  Sections: 0612, 0612, 0612, 0610, 0606, 0404
-    airfoils.names   = {'0612','0612','0612','0610','0606','0404'};
-    airfoils.tc_pct  = [12, 12, 12, 10, 6, 4];      % thickness ratio [%]
+    %  Sections: 0612, 0612, 0612, 0610, 0610, 0606
+    airfoils.names   = {'0612','0612','0612','0610','0610','0606'};
+    airfoils.tc_pct  = [12, 12, 12, 10, 10, 6];      % thickness ratio [%]
 
-    airfoils.clAlpha = [2*pi; 2*pi; 2*pi; 2*pi; 2*pi; 2*pi];  % per rad
-    airfoils.clMax   = [1.6581; 1.6581; 1.6581; 1.5252; 0.9342; 0.8204];
+    % At defined Reynolds number, shrinks as you go outboard (chord)!!!
+    airfoils.clAlpha = [6.0; 6.0; 6.0; 6.0; 6.0; 6.0];  % per rad
+    airfoils.clMax   = [1.81; 1.80; 1.79; 1.64; 1.61; 0.99];
 
     ac.airfoils = airfoils;
 
@@ -54,16 +55,23 @@ function [ac] = AircraftConfig()
     ac.flap = flap;
     ac.slat = slat;
 
-    %% Angles of Attack - Ran for lift cure slope
-    aoa.takeoff = 10;   % deg
-    aoa.landing = 5;    % deg
+    %% OpenVSP Sample Angles of Attack
+    %  The two alphas at which VSPAERO was run. Used to:
+    %    (1) Compute CL_alpha_W from the two CL points
+    %    (2) Interpolate the baseline cl*c/cref distribution to alpha_trim
+    %  These are NO LONGER design takeoff/landing angles — alpha_trim is
+    %  computed per configuration (see RunTradeSweep.m).
+    aoa.takeoff = 10;   % deg — upper VSP sample (kept name for compatibility)
+    aoa.landing = 5;    % deg — lower VSP sample (kept name for compatibility)
+    aoa.vspHigh = 10;   % deg — explicit alias for clarity
+    aoa.vspLow  = 5;    % deg — explicit alias for clarity
 
     ac.aoa = aoa;
 
     %% Takeoff and Landing Velocity Constraints - Limiting Factor
 
-    spdcnst.VLOFcnst = 170; % kts (knots)
-    spdcnst.VAPPcnst = 170; % kts (knots)
+    spdcnst.VLOFcnst = 150; % kts (knots)
+    spdcnst.VAPPcnst = 150; % kts (knots)
 
     ac.spdcnst = spdcnst;
 

@@ -63,6 +63,19 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
     hl.cPrimeOverC_flap = 1 + ac.flap.cfOverC .* cosd(hl.deltaSweep);
     hl.cPrimeOverC_slat = 1 + ac.slat.cfOverC .* cosd(hl.deltaSweep);
 
+    %% Swf/S — Ratio of flapped wing area to total wing reference area
+    %  Integrate the chord distribution over the flap spanwise extent.
+    %  For a half-wing:  S_wf_half = integral of c(y) dy from y_begin to y_end
+    %  Converting to eta:  dy = (b/2) * d(eta)
+    %  Full-wing flapped area:  S_wf = 2 * (b/2) * integral( c d(eta) )
+    %                                = b * trapz( eta, c )   over flap region
+    flapMask = (etaTO >= hl.etaBeginFlap) & (etaTO <= hl.etaEndFlap);
+    if sum(flapMask) >= 2
+        hl.Swf_over_S = VSP.b * trapz(etaTO(flapMask), VSP.cDistro(flapMask)) / VSP.sRef;
+    else
+        hl.Swf_over_S = 0;
+    end
+
     %% K_Delta — sweep correction on CLmax (Fig 8.55, p263)
     Lambda = ac.wing.Lambda_c4;
     hl.KDelta = (1 - 0.08 * cosd(Lambda)^2) * cosd(Lambda)^(3/4);
@@ -205,5 +218,13 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
     %% Store section data needed by ModifiedCLDistro
     hl.clAlphaDistro = ac.airfoils.clAlpha;
     hl.CLalpha_W     = clean.CLalpha_W;
+
+    %% Store VSP baseline samples for alpha_trim interpolation
+    %  RunTradeSweep will interpolate cl*c/cref from these two samples
+    %  (at vspLow and vspHigh) to alpha_trim for each config.
+    hl.alpha_vspHigh        = ac.aoa.vspHigh;        % deg
+    hl.alpha_vspLow         = ac.aoa.vspLow;         % deg
+    hl.clDistroSpan_vspHigh = VSP.clDistroSpanTO;    % at vspHigh (10 deg)
+    hl.clDistroSpan_vspLow  = VSP.clDistroSpanLD;    % at vspLow  (5 deg)
 
 end

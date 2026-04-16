@@ -9,7 +9,7 @@
 %
 %  Plot Certain Conditions:
 %    After running, inspect any (df, ds) config from the command window:
-%    >> PlotConfig(tradeResults, VSP, ac, clean, 10, 25)
+%    example: >> PlotConfig(tradeResults, VSP, ac, clean, 10, 25)
 
 clc; clear; close all
 

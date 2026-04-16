@@ -43,13 +43,14 @@ fprintf('    Flap:  cf/c = %.2f   (Fig 8.17 row index = %d)\n', ...
 fprintf('    Slat:  cf/c = %.2f   (Fig 8.26 index = %d)\n', ...
     ac.slat.cfOverC, ac.slat.fig826_index);
 fprintf('\n');
-fprintf('  Design Angles of Attack\n');
-fprintf('    Takeoff alpha = %d deg\n', ac.aoa.takeoff);
-fprintf('    Landing alpha = %d deg\n', ac.aoa.landing);
+fprintf('  OpenVSP Sample Angles (for CL_alpha_W and baseline interp.)\n');
+fprintf('    alpha_low  (VSP sample) = %d deg\n', ac.aoa.vspLow);
+fprintf('    alpha_high (VSP sample) = %d deg\n', ac.aoa.vspHigh);
+fprintf('    (alpha_trim is computed per config — see trade sweep)\n');
 fprintf('\n');
 fprintf('  Design Takeoff and Landing Velocity Constraints\n');
-fprintf('    Takeoff VLOF = %d kts\n', ac.spdcnst.VLOFcnst);
-fprintf('    Landing VAPP = %d kts\n', ac.spdcnst.VAPPcnst);
+fprintf('    V_LOF max = %d kts\n', ac.spdcnst.VLOFcnst);
+fprintf('    V_APP max = %d kts\n', ac.spdcnst.VAPPcnst);
 fprintf('----------------------------------------------------------------------\n\n');
 
 %% 2. Read OpenVSP Aerodynamic & Geometry Data
@@ -106,10 +107,10 @@ clean = ComputeCleanWing(VSP, ac, sectionEta);
 fprintf('----------------------------------------------------------------------\n');
 fprintf('  CLEAN WING ANALYSIS\n');
 fprintf('----------------------------------------------------------------------\n');
-fprintf('  CL at takeoff (alpha = %d deg) = %.4f\n', ac.aoa.takeoff, clean.CL_TO);
-fprintf('  CL at landing (alpha = %d deg) = %.4f\n', ac.aoa.landing, clean.CL_LD);
+fprintf('  CL at alpha_high (%d deg) = %.4f  [VSP sample]\n', ac.aoa.vspHigh, clean.CL_TO);
+fprintf('  CL at alpha_low  (%d deg) = %.4f  [VSP sample]\n', ac.aoa.vspLow, clean.CL_LD);
 fprintf('  Delta CL / Delta alpha = (%.4f - %.4f) / (%d - %d) deg\n', ...
-    clean.CL_TO, clean.CL_LD, ac.aoa.takeoff, ac.aoa.landing);
+    clean.CL_TO, clean.CL_LD, ac.aoa.vspHigh, ac.aoa.vspLow);
 fprintf('  CL_alpha_W = %.4f /rad  (= %.5f /deg)\n', ...
     clean.CLalpha_W, clean.CLalpha_W * pi / 180);
 fprintf('\n');
@@ -120,7 +121,7 @@ fprintf('    CLmax_W (clean) = %.4f\n', clean.CLmax_W);
 fprintf('\n');
 VS_clean = sqrt((2 * ac.weights.WTO) / ...
     (ac.atmo.density * VSP.sRef * clean.CLmax_W));
-fprintf('  Clean Wing Stall Speed (at WTO)\n');
+fprintf('  Clean Wing Reference V_S (no devices)\n');
 fprintf('    V_S = sqrt(2 * %.0f / (%.6f * %.2f * %.4f))\n', ...
     ac.weights.WTO, ac.atmo.density, VSP.sRef, clean.CLmax_W);
 fprintf('        = %.2f ft/s  (%.1f kts)\n', VS_clean, VS_clean * 0.592484);
@@ -183,14 +184,17 @@ fprintf('----------------------------------------------------------------------\
 
 %% 6. Trade Study: Sweep Flap and Slat Deflections
 fprintf('======================================================================\n');
-fprintf('  TRADE STUDY: Flap & Slat Deflection Sweep\n');
+fprintf('  TRADE STUDY: Flap & Slat Deflection Sweep (alpha-trim method)\n');
 fprintf('  Grid: %d flap x %d slat = %d configurations\n', ...
     length(hl.deltaSweep), length(hl.deltaSweep), length(hl.deltaSweep)^2);
+fprintf('  For each (df, ds): compute CLmax, derive V_S/V_LOF/V_APP,\n');
+fprintf('  back-solve CL_op from L=W, bisect to find alpha_trim where\n');
+fprintf('  integrated flapped loading equals CL_op.\n');
 fprintf('======================================================================\n\n');
 fprintf('----------------------------------------------------------------------\n');
-fprintf('  Design Takeoff and Landing Velocity Constraints\n');
-fprintf('    Takeoff VLOF = %d kts\n', ac.spdcnst.VLOFcnst);
-fprintf('    Landing VAPP = %d kts\n', ac.spdcnst.VAPPcnst);
+fprintf('  Velocity Constraints (pass/fail filter)\n');
+fprintf('    V_LOF max = %d kts\n', ac.spdcnst.VLOFcnst);
+fprintf('    V_APP max = %d kts\n', ac.spdcnst.VAPPcnst);
 fprintf('----------------------------------------------------------------------\n\n');
 
 tradeResults = RunTradeSweep(VSP, ac, clean, hl, sectionEta);
@@ -208,15 +212,18 @@ if ~isempty(tradeResults.bestTO) && ~isempty(tradeResults.bestLD)
         ac.flap.cfOverC, tradeResults.bestTO.df);
     fprintf('    Slat:  cf/c = %.2f,  delta_s = %d deg\n', ...
         ac.slat.cfOverC, tradeResults.bestTO.ds);
-    fprintf('    CL achieved  = %.4f\n', tradeResults.bestTO.CLTO);
-    fprintf('    CL required  = %.4f\n', tradeResults.bestTO.CLreq);
-    fprintf('    CL margin    = %.4f  (%.1f%%)\n', ...
-        tradeResults.bestTO.CLTO - tradeResults.bestTO.CLreq, ...
-        (tradeResults.bestTO.CLTO - tradeResults.bestTO.CLreq) / tradeResults.bestTO.CLreq * 100);
-    fprintf('    V_stall      = %.2f ft/s  (%.1f kts)\n', ...
+    fprintf('    CLmax (with devices)   = %.4f\n', tradeResults.bestTO.CLmax);
+    fprintf('    V_stall                = %.2f ft/s  (%.1f kts)\n', ...
         tradeResults.bestTO.VS, tradeResults.bestTO.VS * 0.592484);
-    fprintf('    V_LOF (1.1Vs)= %.2f ft/s  (%.1f kts)\n', ...
-        1.1 * tradeResults.bestTO.VS, 1.1 * tradeResults.bestTO.VS * 0.592484);
+    fprintf('    V_LOF (1.1 V_S)        = %.2f ft/s  (%.1f kts) [limit: %d kts]\n', ...
+        tradeResults.bestTO.VLOF, tradeResults.bestTO.VLOF * 0.592484, ...
+        ac.spdcnst.VLOFcnst);
+    fprintf('    alpha_trim (TO)        = %.2f deg  (alpha_stall = %.2f, margin = %.2f deg)\n', ...
+        tradeResults.bestTO.alphaTrim, clean.alphaStall, ...
+        clean.alphaStall - tradeResults.bestTO.alphaTrim);
+    fprintf('    CL operating           = %.4f  (= 2W/(rho V_LOF^2 S))\n', ...
+        tradeResults.bestTO.CL_op);
+    fprintf('    CL achieved            = %.4f\n', tradeResults.bestTO.CLTO);
     fprintf('\n');
 
     fprintf('  BEST LANDING CONFIGURATION\n');
@@ -225,38 +232,39 @@ if ~isempty(tradeResults.bestTO) && ~isempty(tradeResults.bestLD)
         ac.flap.cfOverC, tradeResults.bestLD.df);
     fprintf('    Slat:  cf/c = %.2f,  delta_s = %d deg\n', ...
         ac.slat.cfOverC, tradeResults.bestLD.ds);
-    fprintf('    CL achieved  = %.4f\n', tradeResults.bestLD.CLLD);
-    fprintf('    CL required  = %.4f\n', tradeResults.bestLD.CLreq);
-    fprintf('    CL margin    = %.4f  (%.1f%%)\n', ...
-        tradeResults.bestLD.CLLD - tradeResults.bestLD.CLreq, ...
-        (tradeResults.bestLD.CLLD - tradeResults.bestLD.CLreq) / tradeResults.bestLD.CLreq * 100);
-    fprintf('    V_stall      = %.2f ft/s  (%.1f kts)\n', ...
+    fprintf('    CLmax (with devices)   = %.4f\n', tradeResults.bestLD.CLmax);
+    fprintf('    V_stall                = %.2f ft/s  (%.1f kts)\n', ...
         tradeResults.bestLD.VS, tradeResults.bestLD.VS * 0.592484);
-    fprintf('    V_APP(1.23Vs)= %.2f ft/s  (%.1f kts)\n', ...
-        1.23 * tradeResults.bestLD.VS, 1.23 * tradeResults.bestLD.VS * 0.592484);
+    fprintf('    V_APP (1.23 V_S)       = %.2f ft/s  (%.1f kts) [limit: %d kts]\n', ...
+        tradeResults.bestLD.VAPP, tradeResults.bestLD.VAPP * 0.592484, ...
+        ac.spdcnst.VAPPcnst);
+    fprintf('    alpha_trim (LD)        = %.2f deg  (alpha_stall = %.2f, margin = %.2f deg)\n', ...
+        tradeResults.bestLD.alphaTrim, clean.alphaStall, ...
+        clean.alphaStall - tradeResults.bestLD.alphaTrim);
+    fprintf('    CL operating           = %.4f\n', tradeResults.bestLD.CL_op);
+    fprintf('    CL achieved            = %.4f\n', tradeResults.bestLD.CLLD);
     fprintf('\n');
 
-    % Count total passing configs
-    nPassTO = sum(tradeResults.CLTOgrid(:) >= tradeResults.CLreqTOgrid(:));
-    nPassLD = sum(tradeResults.CLLDgrid(:) >= tradeResults.CLreqLDgrid(:));
-    nPassBoth = sum(tradeResults.CLTOgrid(:) >= tradeResults.CLreqTOgrid(:) & ...
-                    tradeResults.CLLDgrid(:) >= tradeResults.CLreqLDgrid(:));
-    nTotal = numel(tradeResults.CLTOgrid);
-    fprintf('  CONFIGURATION STATISTICS\n');
-    fprintf('  ------------------------\n');
-    fprintf('    Configs meeting TO requirement : %d / %d  (%.1f%%)\n', ...
-        nPassTO, nTotal, nPassTO/nTotal*100);
-    fprintf('    Configs meeting LD requirement : %d / %d  (%.1f%%)\n', ...
-        nPassLD, nTotal, nPassLD/nTotal*100);
-    fprintf('    Configs meeting BOTH           : %d / %d  (%.1f%%)\n', ...
+    % Count total passing configs (speed constraint filter)
+    nPassTO   = sum(tradeResults.TOpassGrid(:));
+    nPassLD   = sum(tradeResults.LDpassGrid(:));
+    nPassBoth = sum(tradeResults.TOpassGrid(:) & tradeResults.LDpassGrid(:));
+    nTotal    = numel(tradeResults.TOpassGrid);
+    fprintf('  CONFIGURATION STATISTICS (speed constraint pass/fail)\n');
+    fprintf('  -----------------------------------------------------\n');
+    fprintf('    V_LOF <= %d kts : %d / %d  (%.1f%%)\n', ...
+        ac.spdcnst.VLOFcnst, nPassTO, nTotal, nPassTO/nTotal*100);
+    fprintf('    V_APP <= %d kts : %d / %d  (%.1f%%)\n', ...
+        ac.spdcnst.VAPPcnst, nPassLD, nTotal, nPassLD/nTotal*100);
+    fprintf('    BOTH           : %d / %d  (%.1f%%)\n', ...
         nPassBoth, nTotal, nPassBoth/nTotal*100);
 else
     fprintf('  *** NO CONFIGURATION MET BOTH TO AND LD REQUIREMENTS ***\n');
-    nPassTO = sum(tradeResults.CLTOgrid(:) >= tradeResults.CLreqTOgrid(:));
-    nPassLD = sum(tradeResults.CLLDgrid(:) >= tradeResults.CLreqLDgrid(:));
-    nTotal = numel(tradeResults.CLTOgrid);
-    fprintf('    Configs meeting TO only : %d / %d\n', nPassTO, nTotal);
-    fprintf('    Configs meeting LD only : %d / %d\n', nPassLD, nTotal);
+    nPassTO = sum(tradeResults.TOpassGrid(:));
+    nPassLD = sum(tradeResults.LDpassGrid(:));
+    nTotal  = numel(tradeResults.TOpassGrid);
+    fprintf('    V_LOF passing : %d / %d\n', nPassTO, nTotal);
+    fprintf('    V_APP passing : %d / %d\n', nPassLD, nTotal);
 end
 
 fprintf('\n');
