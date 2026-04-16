@@ -11,7 +11,7 @@
 3. [Methodology](#methodology)
    - [Phase 1 — Clean-Wing Analysis](#phase-1--clean-wing-analysis)
    - [Phase 2 — High-Lift Increment Pre-computation](#phase-2--high-lift-increment-pre-computation)
-   - [Phase 3 — Flap/Slat Trade Sweep (Alpha-Trim Method)](#phase-3--flapslat-trade-sweep-alpha-trim-method)
+   - [Phase 3 — Flap/Slat Trade Sweep](#phase-3--flapslat-trade-sweep)
 4. [Project Structure](#project-structure)
 5. [Prerequisites](#prerequisites)
 6. [Required Input Data](#required-input-data)
@@ -27,17 +27,20 @@
 
 ## Overview
 
-This program takes a clean-wing aerodynamic baseline produced in **OpenVSP / VSPAERO**, applies the semi-empirical high-lift corrections from **Roskam Part VI, Ch. 8**, and sweeps the full **flap-deflection × slat-deflection** design space to find the minimum-deflection configuration that satisfies user-specified **takeoff and landing speed constraints**.
+This program takes a clean-wing aerodynamic baseline produced in **OpenVSP / VSPAERO**, applies the semi-empirical high-lift corrections from **Roskam Part VI, Ch. 8**, and sweeps the full **flap-deflection × slat-deflection** design space to find the minimum-deflection configuration that satisfies both **speed constraints** and **positive stall margin** at takeoff and landing.
 
 For every point in the grid, the code:
 
 1. Computes $C_{L_{\max}}$ with devices deployed (spanwise integration of $\Delta c_{l_{\max}}$).
 2. Derives $V_S$, $V_{LOF}=1.1\,V_S$, and $V_{APP}=1.23\,V_S$.
-3. Back-solves the operating lift coefficient from $L=W$.
-4. **Bisects to find the trim angle of attack** such that the integrated, device-modified spanwise loading equals that operating $C_L$.
-5. Flags the configuration as pass / fail against the user’s $V_{LOF}$ and $V_{APP}$ limits.
+3. Back-solves the operating lift coefficient from wing-only $L=W$.
+4. **Bisects to find the operating angle of attack** such that the integrated, device-modified spanwise loading equals that operating $C_L$.
+5. **Constructs the deployed stall AOA** using Roskam's Fig. 8.58 Step 4 geometric construction combined with Eq. 8.28 for the flapped lift-curve slope.
+6. Flags the configuration pass / fail against **both** the user's speed limits and positive stall margin for takeoff and landing.
 
 The best takeoff and landing configurations — selected by minimum total deflection among passing cells — are reported, plotted, and returned to the MATLAB workspace for further inspection.
+
+> **Scope note — wing-only lift balance, not full trim.** The "$\alpha$-solve" inside the sweep enforces $L_{wing}(\alpha) = W$ at a given speed. It does **not** enforce pitch-moment equilibrium, tail download, or elevator trim drag. For a high-lift sizing study this is the right scope — those are downstream problems handled by a separate trim analysis. The variable names `alphaTrim*` are retained for backward compatibility; they represent the operating AOA at which the wing's integrated lift balances weight.
 
 ---
 
@@ -46,12 +49,14 @@ The best takeoff and landing configurations — selected by minimum total deflec
 | Capability | Notes |
 |---|---|
 | 3D aerodynamic baseline | Uses VSPAERO spanwise $c_l\cdot c/c_{ref}$ distributions, not strip-theory guesses |
-| Full Roskam Ch. 8 stack | Figures 8.17, 8.26, 8.31–8.37, 8.53, 8.55 digitized and interpolated |
+| Full Roskam Ch. 8 stack | Figures 8.17, 8.26, 8.31–8.37, 8.53, 8.55, 8.58 digitized, interpolated, or directly implemented |
 | Per-section airfoil data | Multi-segment wings with different $c_{l_{\max}}$, $t/c$, and $c_{l\alpha}$ per panel |
-| Alpha-trim solver | Physically consistent AOA for each $(\delta_f, \delta_s)$ via bisection on $L=W$ |
+| Operating-AOA solver | Physically consistent AOA for each $(\delta_f, \delta_s)$ via bisection on wing $L=W$ |
+| Deployed-stall construction | Per-cell $\alpha_{stall}^\delta$ from Roskam Fig. 8.58 Step 4 + Eq. 8.28 flapped slope |
+| Dual pass/fail | Both speed limits **and** positive stall margin must hold; separate masks stored for diagnostics |
 | Winglet exclusion | Stall search automatically ignores non-lifting winglet stations |
 | Velocity-constraint filtering | User sets $V_{LOF}^{max}$ and $V_{APP}^{max}$ in knots |
-| Rich plotting | Heat maps, feasibility overlay, spanwise loadings, $C_L$–$\alpha$ curves |
+| Rich plotting | Speed heat maps, feasibility overlay, $C_{L_{\max}}$ surface, stall-margin maps, spanwise loadings |
 | Config inspector | `PlotConfig(tradeResults, VSP, ac, clean, df, ds)` — drill into any cell after the fact |
 
 ---
@@ -87,9 +92,9 @@ $$
 \frac{\,c_{l_{\max}}(\eta_i) - c_l(\eta_i)\,}{\,C_{L_\alpha}^{W}\cdot\pi/180\,}
 $$
 
-The wing’s **$\alpha_{stall}$** is the minimum of these local values, restricted to lifting stations (winglet sections, identified by having $\eta$ beyond the outboard wing break, are excluded).
+The wing's **$\alpha_{stall}$** is the minimum of these local values, restricted to lifting stations (winglet sections, identified by having $\eta$ beyond the outboard wing break, are excluded).
 
-**Clean-wing $C_{L_{\max}}$** is then obtained by projecting each station’s $c_l$ to $\alpha_{stall}$ via the wing slope and re-integrating — the tangency condition on the $c_{l_{\max}}$ envelope.
+**Clean-wing $C_{L_{\max}}$** is then obtained by projecting each station's $c_l$ to $\alpha_{stall}$ via the wing slope and re-integrating — the tangency condition on the $c_{l_{\max}}$ envelope.
 
 ---
 
@@ -166,13 +171,24 @@ $$
 K_\Delta \;=\; \bigl(1 - 0.08\cos^2\Lambda_{c/4}\bigr)\cos^{3/4}\Lambda_{c/4}
 $$
 
+#### Flapped lift-curve slope (Eq. 8.28)
+
+$$
+(C_{L_\alpha}^{W})_\delta
+\;=\;
+C_{L_\alpha}^{W}\;\Bigl[\,1 + \bigl(\tfrac{c'}{c} - 1\bigr)\tfrac{S_{W_f}}{S}\,\Bigr]
+$$
+
+The flapped wing area fraction $S_{W_f}/S$ is computed by integrating the chord distribution over the flap spanwise extent; $c'/c$ is the Fowler extension for the current $\delta_f$. This slope is used downstream in the stall-AOA construction. Slats are not included in this slope correction per Roskam §8.1.4.2 — Eq. 8.28 captures the TE-flap chord extension; the slat's contribution enters through the $\Delta C_{L_w}$ term below.
+
 ---
 
-### Phase 3 — Flap/Slat Trade Sweep (Alpha-Trim Method)
+### Phase 3 — Flap/Slat Trade Sweep
 
 For every $(\delta_f, \delta_s)$ on the grid (default 41 × 41 = **1,681** configurations):
 
 1. **$C_{L_{\max}}$ with devices** — integrate the TE and LE $\Delta c_{l_{\max}}$ tables and add the sweep-corrected result to the clean-wing $C_{L_{\max}}$.
+
 2. **Reference speeds**
 
 $$
@@ -183,7 +199,7 @@ V_{LOF} = 1.1\,V_S
 V_{APP} = 1.23\,V_S
 $$
 
-3. **Operating $C_L$** required at those speeds (from $L=W$)
+3. **Operating $C_L$** required at those speeds (wing-only $L=W$)
 
 $$
 C_{L,op}^{TO} \;=\; \frac{2\,W_{TO}}{\rho\,V_{LOF}^{2}\,S_{ref}}
@@ -191,9 +207,38 @@ C_{L,op}^{TO} \;=\; \frac{2\,W_{TO}}{\rho\,V_{LOF}^{2}\,S_{ref}}
 C_{L,op}^{LD} \;=\; \frac{2\,W_{LD}}{\rho\,V_{APP}^{2}\,S_{ref}}
 $$
 
-4. **Alpha-trim solve (bisection)** — Find $\alpha_{trim}$ such that the integrated, device-modified spanwise loading equals $C_{L,op}$. The baseline loading between the two VSP samples is linearly interpolated in $\alpha$; device increments are evaluated at the trial $\alpha$. Convergence tolerance: $|C_L - C_{L,op}| < 10^{-5}$ or $\Delta\alpha < 10^{-4}$ deg.
-5. **Pass/fail filter** — The configuration passes if $V_{LOF} \le V_{LOF}^{max}$ (takeoff) or $V_{APP} \le V_{APP}^{max}$ (landing).
-6. **Best configuration** — Among passing cells, pick the one with **minimum $\delta_f + \delta_s$**; ties broken by smaller $\delta_f$. This rewards aerodynamically clean designs that meet the spec with the least deflection.
+4. **Operating-AOA solve (bisection)** — Find $\alpha_{op}$ such that the integrated, device-modified spanwise loading equals $C_{L,op}$. The baseline loading between the two VSP samples is linearly interpolated in $\alpha$; device increments are evaluated at the trial $\alpha$. Convergence tolerance: $|C_L - C_{L,op}| < 10^{-5}$ or $\Delta\alpha < 10^{-4}$ deg.
+
+5. **Deployed stall AOA — Roskam Fig. 8.58 Step 4.** The key observation: flaps and slats don't just add lift, they shift the $C_L$–$\alpha$ curve in characteristically different ways. Slats push $\alpha_{stall}$ *up*; flaps pull it *down*. The geometric construction in Fig. 8.58 lets you locate the new stall point from three ingredients already computed:
+
+$$
+\boxed{\;\alpha_{stall}^{\delta}
+\;=\;
+\alpha_{stall}^{clean}
+\;+\;
+\frac{\Delta C_{L_{\max}} - \Delta C_{L_w}}{(C_{L_\alpha}^{W})_\delta}\;}
+$$
+
+| Term | Source | Sign effect |
+|---|---|---|
+| $\alpha_{stall}^{clean}$ | Phase 1 | Baseline |
+| $\Delta C_{L_{\max}}$ | Integrated TE + LE $\Delta c_{l_{\max}}$ tables | Raises the curve's peak |
+| $\Delta C_{L_w}$ | Vertical shift at operating AOA: $C_{L,flapped}(\alpha_{op}) - C_{L,clean}(\alpha_{op})$ | Raises the curve uniformly |
+| $(C_{L_\alpha}^{W})_\delta$ | Eq. 8.28 (precomputed) | Steepens the curve with flaps |
+
+When $\Delta C_{L_{\max}} > \Delta C_{L_w}$ (slat-dominated) the numerator is positive and $\alpha_{stall}^{\delta} > \alpha_{stall}^{clean}$. When $\Delta C_{L_{\max}} < \Delta C_{L_w}$ (flap-dominated) the numerator is negative and $\alpha_{stall}^{\delta} < \alpha_{stall}^{clean}$. Mixed configurations land wherever the two effects net out. The $\Delta C_{L_w}$ term is essentially $\alpha$-independent (device increments in `ModifiedCLDistro` don't depend on $\alpha$), so it's evaluated once per cell using the takeoff integration.
+
+6. **Stall margins**
+
+$$
+\text{margin}^{TO} = \alpha_{stall}^{\delta} - \alpha_{op}^{TO}
+\qquad
+\text{margin}^{LD} = \alpha_{stall}^{\delta} - \alpha_{op}^{LD}
+$$
+
+7. **Pass/fail filter** — A configuration passes for takeoff if **both** $V_{LOF} \le V_{LOF}^{max}$ **and** $\text{margin}^{TO} > 0$. Landing similarly with $V_{APP}$ and $\text{margin}^{LD}$. Separate grids (`TOpassV_Grid`, `TOpassA_Grid`, etc.) are stored so you can diagnose which constraint is binding for any given cell.
+
+8. **Best configuration** — Among passing cells, pick the one with **minimum $\delta_f + \delta_s$**; ties broken by smaller $\delta_f$. This rewards aerodynamically clean designs that meet the spec with the least deflection.
 
 ---
 
@@ -211,22 +256,25 @@ high-lift-sizing/
 ├── ReadFileGeom.m                 ← Parses DegenGeom .csv for LE coordinates
 │
 ├── ComputeCleanWing.m             ← α_stall, CL_α, CL_max (clean)
-├── ComputeHighLiftIncrements.m    ← Cached Roskam arrays for the sweep
+├── ComputeHighLiftIncrements.m    ← Cached Roskam arrays + Eq 8.28 flapped slope
 ├── ModifiedCLDistro.m             ← Applies flap + slat Δcl to the loading
 ├── ComputeCL.m                    ← Spanwise integration
 ├── ComputeEta.m                   ← 2y/b
 ├── CLtoWeight.m                   ← CL = 2W/(ρV²S)
 ├── DeltaCL.m                      ← Utility
 │
-├── RunTradeSweep.m                ← The (δf, δs) sweep + alpha-trim solver
+├── RunTradeSweep.m                ← The (δf, δs) sweep + operating-AOA solver
+│                                    + Fig 8.58 Step 4 stall construction
 │
-├── PlotResults.m                  ← Design-space & best-config plots
+├── PlotResults.m                  ← Design-space & stall-margin plots
 ├── PlotConfig.m                   ← Inspector for a single (δf, δs)
 │
 └── test/
     ├── BAAT4_polar.csv                           ← VSPAERO output
     └── BAAT3_FuselageWingChanged_DegenGeom.csv   ← DegenGeom output
 ```
+
+Bundled `test/` data was generated from a wing-only VSP model at M = 0.24, Re_crit = 2×10⁷, with $\alpha = 5°$ and $10°$ samples — these must match `ac.aoa.vspLow` / `ac.aoa.vspHigh`.
 
 ---
 
@@ -310,7 +358,7 @@ All user-editable inputs live in **`AircraftConfig.m`**. Edit this file to match
 | `aoa.vspLow` | Lower $\alpha$ in the VSPAERO polar (e.g. 5°) |
 | `aoa.vspHigh` | Upper $\alpha$ in the VSPAERO polar (e.g. 10°) |
 
-> `aoa.takeoff` / `aoa.landing` are **not design angles** — they’re aliases for the VSP sample points. The true trim angle is computed per-configuration.
+> `aoa.takeoff` / `aoa.landing` are **not design angles** — they're aliases for the VSP sample points. The true operating angle is computed per-configuration.
 
 ### Speed constraints
 
@@ -338,14 +386,27 @@ From the MATLAB command window in the project directory:
 >> main
 ```
 
-That’s it. `main.m` clears the workspace and calls `flaplift()`, which returns four structs into the base workspace:
+That's it. `main.m` clears the workspace and calls `flaplift()`, which returns four structs into the base workspace:
 
 | Variable | Contents |
 |---|---|
-| `tradeResults` | Every grid computed: $C_{L_{\max}}$, $V_S$, $V_{LOF}$, $V_{APP}$, $\alpha_{trim}$, pass/fail, modified loadings, best configs |
+| `tradeResults` | Every grid computed: $C_{L_{\max}}$, $V_S$, $V_{LOF}$, $V_{APP}$, $\alpha_{op}$, $\alpha_{stall}^{\delta}$, stall margins, pass/fail masks, modified loadings, best configs |
 | `VSP` | Parsed OpenVSP data |
 | `ac` | The config struct that was used |
 | `clean` | Clean-wing results ($\alpha_{stall}$, $C_{L_{\max}}^{clean}$, etc.) |
+
+Key per-cell fields on `tradeResults`:
+
+| Field | Description |
+|---|---|
+| `CLmaxGrid` | $C_{L_{\max}}$ with devices deployed |
+| `alphaTrimTO_grid`, `alphaTrimLD_grid` | Operating AOA (wing $L=W$) |
+| `alphaStallGrid` | Deployed stall AOA from Fig. 8.58 Step 4 |
+| `stallMarginTO_grid`, `stallMarginLD_grid` | $\alpha_{stall}^{\delta} - \alpha_{op}$ in degrees |
+| `deltaCLw_grid` | Vertical $C_L$ shift from devices at operating AOA |
+| `CLalphaFlappedGrid` | Eq. 8.28 flapped slope per cell |
+| `TOpassGrid`, `LDpassGrid` | Combined speed + AOA pass masks |
+| `TOpassV_Grid`, `TOpassA_Grid` | Speed-only and AOA-only pass masks (for diagnostics) |
 
 ### Inspecting a specific cell after the sweep
 
@@ -364,24 +425,27 @@ opens a three-panel view of the $\delta_f=20°, \delta_s=25°$ configuration: ta
 A running table is printed for every $(\delta_f, \delta_s)$ pair:
 
 ```
-  df  ds  | CLmax   V_S   V_LOF  V_APP | a_TO    CL_op_TO CL_TO   TO | a_LD    CL_op_LD CL_LD   LD
-  --- --- | ------- ----- ------ ----- | ------- -------- ------- -- | ------- -------- ------- --
-  11  15  | 1.9218  136.3 150.0  167.7 | +12.73  1.5882   1.5882  1  |  +6.11  1.0497   1.0497  0
+  df  ds  | CLmax   a_st*  V_S   V_LOF  V_APP | a_TO    CL_op_TO CL_TO   margin TO | a_LD    CL_op_LD CL_LD   margin LD
+  --- --- | ------- ------ ----- ------ ----- | ------- -------- ------- ------- -- | ------- -------- ------- ------- --
+  11  15  | 1.9218  +16.73 136.3 150.0  167.7 | +12.73  1.5882   1.5882  +4.01  1  |  +6.11  1.0497   1.0497  +10.62  0
 ```
 
-- **`CL_op`** = target (from $L=W$).
-- **`CL_TO`** / **`CL_LD`** = achieved by integration of the α-trimmed modified loading. They should match `CL_op` to 4 decimals — that’s the bisection convergence.
-- Trailing **`1`** / **`0`** = pass/fail on the $V_{LOF}$ / $V_{APP}$ constraint.
+- **`a_st*`** = deployed stall AOA (Fig. 8.58 Step 4) in degrees.
+- **`CL_op`** = target (from wing $L=W$).
+- **`CL_TO`** / **`CL_LD`** = achieved by integration of the operating-$\alpha$ modified loading. They should match `CL_op` to 4 decimals — that's the bisection convergence.
+- **`margin`** = $\alpha_{stall}^{\delta} - \alpha_{op}$ in degrees; positive is good.
+- Trailing **`1`** / **`0`** = pass/fail (both speed AND margin must hold).
 
 ### Plots
 
-Running `flaplift()` generates three figures by default:
+Running `flaplift()` generates four figures by default:
 
 | Figure | Panels |
 |---|---|
-| **1 — Design Space** | (a) $V_{LOF}$ heat map with constraint contour · (b) $V_{APP}$ heat map · (c) feasibility map (fails-both / TO-only / LD-only / both-pass) · (d) $\alpha_{trim,TO}$ with TO and LD stall boundaries |
+| **1 — Design Space** | (a) $V_{LOF}$ heat map with constraint contour · (b) $V_{APP}$ heat map · (c) feasibility map (fails-both / TO-only / LD-only / both-pass) · (d) $C_{L_{\max}}$ surface with best markers |
 | **2 — Best-Config Loadings** | Spanwise $c_l\cdot c/c_{ref}$ for the best TO and LD cells, with flap and slat regions shaded |
-| **3 — $C_{L_{\max}}$ Heat Map** | Full grid of device-on $C_{L_{\max}}$ with labeled contours |
+| **3 — $C_{L_{\max}}$ Heat Map** | Standalone $C_{L_{\max}}$ surface with labeled contours |
+| **4 — Stall Margins** | Side-by-side TO and LD stall-margin heat maps at their natural scales |
 
 ---
 
@@ -407,7 +471,9 @@ With the default `AircraftConfig.m` (163,800 lb transport, AR = 15, $\Lambda_{c/
 | $C_{L_{\max}}$ with devices | 1.9218 |
 | $V_S$ | 136.3 kt |
 | $V_{LOF}$ | 150.0 kt *(at the constraint)* |
-| $\alpha_{trim}$ | 12.73° (2.76° stall margin) |
+| $\alpha_{op}$ | 12.73° |
+| $\alpha_{stall}^{\delta}$ | 16.73° *(slat-dominated — pushed up from 15.48° clean)* |
+| Stall margin | **+4.01°** |
 
 **Best landing configuration**
 
@@ -418,7 +484,9 @@ With the default `AircraftConfig.m` (163,800 lb transport, AR = 15, $\Lambda_{c/
 | $C_{L_{\max}}$ with devices | 2.4052 |
 | $V_S$ | 121.9 kt |
 | $V_{APP}$ | 149.9 kt *(at the constraint)* |
-| $\alpha_{trim}$ | 3.75° (11.73° stall margin) |
+| $\alpha_{op}$ | 3.75° |
+| $\alpha_{stall}^{\delta}$ | 17.06° *(flap camber pulls down, slat pushes up — net positive)* |
+| Stall margin | **+13.31°** |
 
 **Feasibility statistics** (1,681 configurations)
 
@@ -426,7 +494,9 @@ With the default `AircraftConfig.m` (163,800 lb transport, AR = 15, $\Lambda_{c/
 |---|---|
 | $V_{LOF}\le 150$ kt | 1,133 / 1,681 (67.4%) |
 | $V_{APP}\le 150$ kt | 118 / 1,681 (7.0%) |
-| **Both** | 118 / 1,681 (7.0%) |
+| **Both (speed + stall margin)** | 118 / 1,681 (7.0%) |
+
+> In this design the AOA-margin constraint is never binding — every speed-passing cell also passes stall margin. That's a design outcome, not a given; run a heavier aircraft or a slower $V_{LOF}$ target and the stall margin becomes the active constraint for low-slat configurations.
 
 ---
 
@@ -444,11 +514,11 @@ Coarser sweep ⇒ faster run; finer ⇒ smoother heat maps.
 
 ### Change the best-config selection metric
 
-`RunTradeSweep.m` → `pickMinDeflection(...)` currently minimizes $\delta_f + \delta_s$. Replace the ranking criterion to optimize for, e.g., maximum $C_{L_{\max}}$, minimum $\alpha_{trim}$, or maximum stall margin.
+`RunTradeSweep.m` → `pickMinDeflection(...)` currently minimizes $\delta_f + \delta_s$. Replace the ranking criterion to optimize for, e.g., maximum $C_{L_{\max}}$, maximum stall margin, or a weighted combination.
 
 ### Override the Roskam data
 
-Open `LoadRoskamData.m` and replace any digitized array with your own values (or a different figure’s). All downstream code just uses the struct fields.
+Open `LoadRoskamData.m` and replace any digitized array with your own values (or a different figure's). All downstream code just uses the struct fields.
 
 ### Add drag bookkeeping
 
@@ -459,8 +529,9 @@ The current code is lift-only. A drag polar for the deployed configuration could
 ## Assumptions & Limitations
 
 - **Incompressible, low-Mach methodology.** Roskam Part VI Ch. 8 is built for subsonic high-lift design; no compressibility corrections are applied.
-- **Linear-in-α baseline interpolation.** Between the two VSP sample angles, $C_L$ is assumed linear in $\alpha$. The two samples should bracket the expected $\alpha_{trim}$ (the bisection will extrapolate if needed, but accuracy degrades).
-- **Trim is purely a lift balance.** Pitching moment, tail download, and elevator trim drag are not modeled.
+- **Linear-in-α baseline interpolation.** Between the two VSP sample angles, $C_L$ is assumed linear in $\alpha$. The two samples should bracket the expected operating $\alpha$ (the bisection will extrapolate if needed, but accuracy degrades).
+- **Wing-only lift balance — not full trim.** The operating-AOA solve enforces $L_{wing}=W$ only. Pitching moment, tail download, elevator trim drag, and flight-path angle effects are not modeled. This is intentional scoping for a high-lift sizing study — downstream trim analysis should handle those.
+- **Fig. 8.58 Step 4 construction is geometric.** The deployed $\alpha_{stall}^{\delta}$ comes from a linear construction on the $C_L$–$\alpha$ diagram (slope + vertical shift + peak shift). It inherits the accuracy of the underlying $\Delta C_{L_{\max}}$ and Eq. 8.28 models. Expect a degree or two of uncertainty; this is a conceptual-design tool, not a CFD surrogate.
 - **Rigid geometry.** Aeroelastic loading and flap-tab interactions are ignored.
 - **Roskam data is digitized.** Curves are read from chart images; expect a few percent of reading error. Re-digitize into `LoadRoskamData.m` if you need tighter fidelity.
 - **Ground effect is excluded.** Reference speeds are out-of-ground-effect $V_S$ values.
@@ -471,12 +542,11 @@ The current code is lift-only. A drag polar for the deployed configuration could
 ## References
 
 1. **Roskam, J.** *Airplane Design, Part VI: Preliminary Calculation of Aerodynamic, Thrust and Power Characteristics.* DARcorporation.
-   - §8.1 — Clean-wing stall and $C_{L_{\max}}$ (wing-station tangency method)
-   - §8.2 — Fowler flap lift increments (Eq. 8.6, Fig. 8.17)
-   - §8.3 — Slat/LE device lift increments (Eq. 8.15, Fig. 8.26)
-   - §8.4 — $\Delta C_{L_{\max}}$ for TE flaps (Eq. 8.18, Figs. 8.31–8.34)
-   - §8.4 — $\Delta C_{L_{\max}}$ for LE devices (Eq. 8.19, Figs. 8.35–8.37)
-   - §8.5 — 3D corrections and sweep effects (Eq. 8.27, Figs. 8.53, 8.55)
+   - §8.1.3 — Clean-wing stall and $C_{L_{\max}}$ (wing-station tangency method, Fig. 8.48)
+   - §8.1.4 — Flap lift and max-lift increments (Eqs. 8.6, 8.18, Figs. 8.17, 8.31–8.34, 8.53)
+   - §8.1.4 — Slat/LE device lift and max-lift increments (Eqs. 8.15, 8.19, Figs. 8.26, 8.35–8.37)
+   - §8.1.4.3 — 3D corrections and sweep effects (Figs. 8.53, 8.55)
+   - §8.1.4.4 — Flapped lift-curve slope (Eq. 8.28) and Flaps-Down Wing Lift Curve construction (Fig. 8.58)
 
 2. **OpenVSP documentation** — [openvsp.org](https://openvsp.org) — VSPAERO panel-method solver and DegenGeom exports.
 

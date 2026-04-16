@@ -12,16 +12,16 @@ function PlotResults(results, VSP, ac, clean)
 %     (2) LD: same
 %     Flap and slat spanwise regions are shaded.
 
-    deltaSweep = results.deltaSweep;
-    VLOFkts    = results.VLOFgrid' * 0.592484;
-    VAPPkts    = results.VAPPgrid' * 0.592484;
-    alphaTO    = results.alphaTrimTO_grid';
-    alphaLD    = results.alphaTrimLD_grid';
-    TOpass     = results.TOpassGrid';
-    LDpass     = results.LDpassGrid';
-    alphaStall = results.alphaStall;
-    bestTO     = results.bestTO;
-    bestLD     = results.bestLD;
+    deltaSweep     = results.deltaSweep;
+    VLOFkts        = results.VLOFgrid' * 0.592484;
+    VAPPkts        = results.VAPPgrid' * 0.592484;
+    alphaTO        = results.alphaTrimTO_grid';
+    alphaLD        = results.alphaTrimLD_grid';
+    TOpass         = results.TOpassGrid';
+    LDpass         = results.LDpassGrid';
+    alphaStallGrid = results.alphaStallGrid';
+    bestTO         = results.bestTO;
+    bestLD         = results.bestLD;
 
     %% ===== Figure 1: Design space =====
     figure('Position', [50 50 1300 900]);
@@ -99,36 +99,32 @@ function PlotResults(results, VSP, ac, clean)
     title('Feasibility (* = best by min deflection)');
     grid on;
 
-    % --- Panel 4: alpha_trim (TO background, TO + LD stall contours) ---
+    % --- Panel 4: Deployed stall angle of attack ---
+    %  alpha_stall,delta per cell from Roskam Fig 8.58 Step 4. Shows where
+    %  the stall point lives in absolute terms, not just as a margin.
     subplot(2,2,4);
-    contourf(deltaSweep, deltaSweep, alphaTO, 20, 'LineStyle', 'none');
+    alphaStallGrid = results.alphaStallGrid';
+    contourf(deltaSweep, deltaSweep, alphaStallGrid, 20, 'LineStyle', 'none');
     hold on;
-    % TO stall contour (solid red, thick)
-    [~, hTO] = contour(deltaSweep, deltaSweep, alphaTO, ...
-        [alphaStall alphaStall], 'r-', 'LineWidth', 2.5);
-    % LD stall contour (dashed magenta, thick)
-    [~, hLD] = contour(deltaSweep, deltaSweep, alphaLD, ...
-        [alphaStall alphaStall], 'm--', 'LineWidth', 2.5);
+    [C, h] = contour(deltaSweep, deltaSweep, alphaStallGrid, ...
+        13:0.5:18, 'k-', 'LineWidth', 0.6);
+    clabel(C, h, 'Color', 'w', 'FontSize', 7);
+    % Reference: clean-wing stall angle
+    contour(deltaSweep, deltaSweep, alphaStallGrid, ...
+        [results.alphaStall results.alphaStall], 'w-', 'LineWidth', 2);
     if ~isempty(bestTO)
-        plot(bestTO.df, bestTO.ds, 'rp', 'MarkerSize', 16, ...
+        plot(bestTO.df, bestTO.ds, 'rp', 'MarkerSize', 14, ...
             'MarkerFaceColor', 'r', 'LineWidth', 1.5);
     end
     if ~isempty(bestLD)
-        plot(bestLD.df, bestLD.ds, 'mp', 'MarkerSize', 16, ...
+        plot(bestLD.df, bestLD.ds, 'mp', 'MarkerSize', 14, ...
             'MarkerFaceColor', 'm', 'LineWidth', 1.5);
     end
     colorbar;
     xlabel('Flap Deflection \delta_f (deg)');
     ylabel('Slat Deflection \delta_s (deg)');
-    title(sprintf(['\\alpha_{trim,TO} (deg)  |  ' ...
-        'red: \\alpha_{trim,TO}=\\alpha_{stall}  |  ' ...
-        'magenta: \\alpha_{trim,LD}=\\alpha_{stall} (\\alpha_{stall}=%.1f°)'], ...
-        alphaStall));
-    % Hint: contour handles into legend
-    if isgraphics(hTO) && isgraphics(hLD)
-        legend([hTO hLD], {'TO stall boundary','LD stall boundary'}, ...
-            'Location', 'best', 'TextColor', 'w');
-    end
+    title(sprintf('\\alpha_{stall,\\delta} (deg)  |  white: clean-wing \\alpha_{stall} = %.2f°', ...
+        results.alphaStall));
     grid on;
 
     sgtitle(sprintf(['High-Lift Trade Study: c_f/c_{flap}=%.2f, ' ...
@@ -187,6 +183,39 @@ function PlotResults(results, VSP, ac, clean)
     title(sprintf(['CL_{max} with devices  ' ...
         '(clean CL_{max} = %.3f)'], results.CLmax_clean));
     grid on;
+
+    %% ===== Figure 4: Stall margins (TO and LD side-by-side) =====
+    figure('Position', [200 200 1300 500]);
+    
+    subplot(1,2,1);
+    contourf(deltaSweep, deltaSweep, results.stallMarginTO_grid', 20, 'LineStyle', 'none');
+    hold on;
+    contour(deltaSweep, deltaSweep, results.stallMarginTO_grid', [0 0], 'w-', 'LineWidth', 2.5);
+    if ~isempty(bestTO)
+        plot(bestTO.df, bestTO.ds, 'rp', 'MarkerSize', 16, ...
+            'MarkerFaceColor', 'r', 'LineWidth', 1.5);
+    end
+    colorbar;
+    xlabel('Flap Deflection \delta_f (deg)');
+    ylabel('Slat Deflection \delta_s (deg)');
+    title('TO Stall Margin \alpha_{stall,\delta} - \alpha_{op,TO} (deg)');
+    grid on;
+    
+    subplot(1,2,2);
+    contourf(deltaSweep, deltaSweep, results.stallMarginLD_grid', 20, 'LineStyle', 'none');
+    hold on;
+    contour(deltaSweep, deltaSweep, results.stallMarginLD_grid', [0 0], 'w-', 'LineWidth', 2.5);
+    if ~isempty(bestLD)
+        plot(bestLD.df, bestLD.ds, 'mp', 'MarkerSize', 16, ...
+            'MarkerFaceColor', 'm', 'LineWidth', 1.5);
+    end
+    colorbar;
+    xlabel('Flap Deflection \delta_f (deg)');
+    ylabel('Slat Deflection \delta_s (deg)');
+    title('LD Stall Margin \alpha_{stall,\delta} - \alpha_{op,LD} (deg)');
+    grid on;
+    
+    sgtitle('Stall Margins by Phase');
 
 end
 

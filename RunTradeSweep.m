@@ -1,5 +1,5 @@
 function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
-% RUNTRADESWEEP  Sweep flap/slat deflections using operating-CL alpha-trim.
+% RUNTRADESWEEP  Sweep flap/slat deflections using operating-CL alpha balance.
 %
 %   For each (df, ds):
 %     1. CLmax_devices from spanwise delta_cl_max integration
@@ -9,12 +9,22 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
 %     3. Operating CL at those speeds:
 %          CL_op_TO = 2*WTO / (rho * V_LOF^2 * S)
 %          CL_op_LD = 2*WLD / (rho * V_APP^2 * S)
-%     4. Solve for alpha_trim such that the integrated flapped spanwise
+%     4. Solve for alpha_op such that the integrated flapped spanwise
 %        loading produces exactly CL_op (bisection).  This is the physical
-%        statement: alpha_trim is the angle where L = W is satisfied when
-%        the wing is evaluated station-by-station with devices deployed.
-%     5. Pass/fail: V_LOF/V_APP below user-specified speed limits.
-%     6. Best config: among passing configs, pick the one with minimum
+%        statement: alpha_op is the angle where wing L = W is satisfied
+%        when the wing is evaluated station-by-station with devices
+%        deployed.
+%     5. Flapped stall AOA (Roskam Fig 8.58 Step 4):
+%          alpha_stall_delta = alpha_stall_clean
+%                            + (deltaCLmax - deltaCL_w) / (CL_alpha_W)_delta
+%        where  deltaCL_w  is the vertical shift of the lift curve at the
+%        operating alpha, and (CL_alpha_W)_delta is the flapped slope from
+%        Roskam Eq 8.28 (precomputed in hl.CLalpha_flapped).
+%     6. Pass/fail:
+%          - Speed:  V_LOF <= V_LOF_max,  V_APP <= V_APP_max
+%          - Stall:  alpha_op < alpha_stall_delta  (positive margin)
+%        Both must hold.
+%     7. Best config: among passing configs, pick the one with minimum
 %        total deflection (df + ds).  Clean aerodynamically.
 
     deltaSweep = hl.deltaSweep;
@@ -41,8 +51,19 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     VLOFgrid         = zeros(nDefl, nDefl);
     VAPPgrid         = zeros(nDefl, nDefl);
 
+    % NEW: flapped-stall-AOA grids (Roskam Fig 8.58 Step 4)
+    alphaStallGrid      = zeros(nDefl, nDefl);   % alpha_stall with devices
+    deltaCLw_grid       = zeros(nDefl, nDefl);   % vertical shift ΔCL_w
+    CLalphaFlappedGrid  = zeros(nDefl, nDefl);   % flapped slope (Eq 8.28)
+    stallMarginTO_grid  = zeros(nDefl, nDefl);   % alpha_stall_delta - alpha_op_TO
+    stallMarginLD_grid  = zeros(nDefl, nDefl);
+
     TOpassGrid       = false(nDefl, nDefl);
     LDpassGrid       = false(nDefl, nDefl);
+    TOpassV_Grid     = false(nDefl, nDefl);      % speed only
+    LDpassV_Grid     = false(nDefl, nDefl);
+    TOpassA_Grid     = false(nDefl, nDefl);      % AOA margin only
+    LDpassA_Grid     = false(nDefl, nDefl);
 
     % Device config fixed fields
     deviceCfg.clAlphaDistro          = hl.clAlphaDistro;
@@ -59,8 +80,8 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     deviceCfg.clDelta_slat           = hl.clDelta_slat;
 
     % Table header
-    fprintf('  df  ds  | CLmax   V_S   V_LOF  V_APP | a_TO    CL_op_TO CL_TO   TO | a_LD    CL_op_LD CL_LD   LD\n');
-    fprintf('  --- --- | ------- ----- ------ ----- | ------- -------- ------- -- | ------- -------- ------- --\n');
+    fprintf('  df  ds  | CLmax   a_st*  V_S   V_LOF  V_APP | a_TO    CL_op_TO CL_TO   margin TO | a_LD    CL_op_LD CL_LD   margin LD\n');
+    fprintf('  --- --- | ------- ------ ----- ------ ----- | ------- -------- ------- ------ -- | ------- -------- ------- ------ --\n');
 
     % Spanwise distribution storage
     modTOall  = zeros(nStations, nDefl, nDefl);
@@ -90,7 +111,8 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
             deltaCLmax_LE = ComputeCL(VSP.b, VSP.sRef, ...
                 dclmaxLE_ccref, etaTO(:), VSP.cRef) * hl.KDelta;
 
-            CLmax = clean.CLmax_W + deltaCLmax_TE + deltaCLmax_LE;
+            deltaCLmax_total = deltaCLmax_TE + deltaCLmax_LE;
+            CLmax = clean.CLmax_W + deltaCLmax_total;
 
             % --- Reference speeds (from CLmax + stall margin factors) ---
             VS   = sqrt(2 * ac.weights.WTO / (ac.atmo.density * VSP.sRef * CLmax));
@@ -103,38 +125,79 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
             CL_op_LD = 2 * ac.weights.WLD / ...
                        (ac.atmo.density * VAPP^2 * VSP.sRef);
 
-            % --- Solve alpha_trim by bisection: integrated loading = CL_op ---
-            [alpha_trim_TO, modTO, cl_base_TO, CLTO] = solveAlphaTrim( ...
+            % --- Solve alpha_op by bisection: integrated loading = CL_op ---
+            [alpha_op_TO, modTO, cl_base_TO, CLTO] = solveAlphaTrim( ...
                 CL_op_TO, a_low, a_high, cl_low, cl_high, ...
                 etaTO, sectionEta, deviceCfg, VSP);
 
-            [alpha_trim_LD, modLD, cl_base_LD, CLLD] = solveAlphaTrim( ...
+            [alpha_op_LD, modLD, cl_base_LD, CLLD] = solveAlphaTrim( ...
                 CL_op_LD, a_low, a_high, cl_low, cl_high, ...
                 etaLD, sectionEta, deviceCfg, VSP);
 
-            % --- Pass/fail (speed constraint is the real filter) ---
-            TOok = (VLOF * 0.592484 <= ac.spdcnst.VLOFcnst);
-            LDok = (VAPP * 0.592484 <= ac.spdcnst.VAPPcnst);
+            % === Flapped stall AOA — Roskam Fig 8.58 Step 4 ===
+            %
+            %   alpha_stall_delta = alpha_stall_clean
+            %                     + (deltaCLmax - deltaCL_w) / (CL_alpha_W)_delta
+            %
+            % Step 1 (Fig 8.58): vertical shift of the lift curve at the
+            % operating alpha. The device increments in ModifiedCLDistro
+            % are independent of alpha, so this is just (flapped CL) -
+            % (clean CL at the same alpha).
+            CL_clean_atOp = ComputeCL(VSP.b, VSP.sRef, ...
+                cl_base_TO, etaTO(:), VSP.cRef);
+            deltaCL_w = CLTO - CL_clean_atOp;
 
-            fprintf('  %2d  %2d  | %.4f  %5.1f  %5.1f  %5.1f | %+6.2f   %.4f   %.4f %d  | %+6.2f   %.4f   %.4f %d \n', ...
+            % Step 2: flapped lift-curve slope from Eq 8.28 (precomputed)
+            CLalpha_flapped = hl.CLalpha_flapped(i);   % /rad
+
+            % Step 4: geometric construction
+            alpha_stall_delta = clean.alphaStall + ...
+                (deltaCLmax_total - deltaCL_w) / (CLalpha_flapped * pi/180);
+
+            stallMargin_TO = alpha_stall_delta - alpha_op_TO;
+            stallMargin_LD = alpha_stall_delta - alpha_op_LD;
+
+            % --- Pass/fail: BOTH speed and AOA margin must hold ---
+            TOok_V = (VLOF * 0.592484 <= ac.spdcnst.VLOFcnst);
+            LDok_V = (VAPP * 0.592484 <= ac.spdcnst.VAPPcnst);
+            TOok_A = (stallMargin_TO > 0);
+            LDok_A = (stallMargin_LD > 0);
+            TOok   = TOok_V && TOok_A;
+            LDok   = LDok_V && LDok_A;
+
+            fprintf(['  %2d  %2d  | %.4f  %+5.2f %5.1f %5.1f  %5.1f | ' ...
+                    '%+6.2f  %.4f   %.4f  %+5.2f  %d  |' ...
+                    '%+6.2f   %.4f   %.4f %+6.2f  %d \n'], ...
                 df, ds, ...
-                CLmax, VS * 0.592484, VLOF * 0.592484, VAPP * 0.592484, ...
-                alpha_trim_TO, CL_op_TO, CLTO, TOok, ...
-                alpha_trim_LD, CL_op_LD, CLLD, LDok);
+                CLmax, alpha_stall_delta, ...
+                VS * 0.592484, VLOF * 0.592484, VAPP * 0.592484, ...
+                alpha_op_TO, CL_op_TO, CLTO, stallMargin_TO, TOok, ...
+                alpha_op_LD, CL_op_LD, CLLD, stallMargin_LD, LDok);
 
             % Store
             CLTOgrid(i, j)         = CLTO;
             CLLDgrid(i, j)         = CLLD;
             CL_op_TO_grid(i, j)    = CL_op_TO;
             CL_op_LD_grid(i, j)    = CL_op_LD;
-            alphaTrimTO_grid(i, j) = alpha_trim_TO;
-            alphaTrimLD_grid(i, j) = alpha_trim_LD;
+            alphaTrimTO_grid(i, j) = alpha_op_TO;
+            alphaTrimLD_grid(i, j) = alpha_op_LD;
             CLmaxGrid(i, j)        = CLmax;
             VSgrid(i, j)           = VS;
             VLOFgrid(i, j)         = VLOF;
             VAPPgrid(i, j)         = VAPP;
+
+            alphaStallGrid(i, j)     = alpha_stall_delta;
+            deltaCLw_grid(i, j)      = deltaCL_w;
+            CLalphaFlappedGrid(i, j) = CLalpha_flapped;
+            stallMarginTO_grid(i, j) = stallMargin_TO;
+            stallMarginLD_grid(i, j) = stallMargin_LD;
+
             TOpassGrid(i, j)       = TOok;
             LDpassGrid(i, j)       = LDok;
+            TOpassV_Grid(i, j)     = TOok_V;
+            LDpassV_Grid(i, j)     = LDok_V;
+            TOpassA_Grid(i, j)     = TOok_A;
+            LDpassA_Grid(i, j)     = LDok_A;
 
             modTOall(:, i, j)   = modTO;
             modLDall(:, i, j)   = modLD;
@@ -150,59 +213,78 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     bestTO = packBestConfig(bestTO_i, bestTO_j, deltaSweep, ...
         CLmaxGrid, VSgrid, VLOFgrid, VAPPgrid, ...
         CL_op_TO_grid, CLTOgrid, alphaTrimTO_grid, ...
+        alphaStallGrid, stallMarginTO_grid, ...
         modTOall, baseTOall, 'TO');
 
     bestLD = packBestConfig(bestLD_i, bestLD_j, deltaSweep, ...
         CLmaxGrid, VSgrid, VLOFgrid, VAPPgrid, ...
         CL_op_LD_grid, CLLDgrid, alphaTrimLD_grid, ...
+        alphaStallGrid, stallMarginLD_grid, ...
         modLDall, baseLDall, 'LD');
 
     if ~isempty(bestTO)
-        fprintf('\n  >>> Best TO (min deflection): df=%d, ds=%d, a_trim=%.2f, V_LOF=%.1f kts\n', ...
-            bestTO.df, bestTO.ds, bestTO.alphaTrim, bestTO.VLOF*0.592484);
+        fprintf(['\n  >>> Best TO (min deflection): df=%d, ds=%d, ' ...
+                 'a_op=%.2f, a_stall=%.2f (margin %+.2f), V_LOF=%.1f kts\n'], ...
+            bestTO.df, bestTO.ds, bestTO.alphaTrim, bestTO.alphaStall, ...
+            bestTO.stallMargin, bestTO.VLOF*0.592484);
     else
-        fprintf('\n  >>> No TO config passes speed constraint\n');
+        fprintf('\n  >>> No TO config passes (speed + stall margin)\n');
     end
     if ~isempty(bestLD)
-        fprintf('  >>> Best LD (min deflection): df=%d, ds=%d, a_trim=%.2f, V_APP=%.1f kts\n\n', ...
-            bestLD.df, bestLD.ds, bestLD.alphaTrim, bestLD.VAPP*0.592484);
+        fprintf(['  >>> Best LD (min deflection): df=%d, ds=%d, ' ...
+                 'a_op=%.2f, a_stall=%.2f (margin %+.2f), V_APP=%.1f kts\n\n'], ...
+            bestLD.df, bestLD.ds, bestLD.alphaTrim, bestLD.alphaStall, ...
+            bestLD.stallMargin, bestLD.VAPP*0.592484);
     else
-        fprintf('  >>> No LD config passes speed constraint\n\n');
+        fprintf('  >>> No LD config passes (speed + stall margin)\n\n');
     end
 
     % Pack outputs
-    tradeResults.CLTOgrid         = CLTOgrid;
-    tradeResults.CLLDgrid         = CLLDgrid;
-    tradeResults.CL_op_TO_grid    = CL_op_TO_grid;
-    tradeResults.CL_op_LD_grid    = CL_op_LD_grid;
-    tradeResults.CLreqTOgrid      = CL_op_TO_grid;
-    tradeResults.CLreqLDgrid      = CL_op_LD_grid;
-    tradeResults.alphaTrimTO_grid = alphaTrimTO_grid;
-    tradeResults.alphaTrimLD_grid = alphaTrimLD_grid;
-    tradeResults.alphaTrimGrid    = alphaTrimTO_grid;
-    tradeResults.CLmaxGrid        = CLmaxGrid;
-    tradeResults.VSgrid           = VSgrid;
-    tradeResults.VLOFgrid         = VLOFgrid;
-    tradeResults.VAPPgrid         = VAPPgrid;
-    tradeResults.TOpassGrid       = TOpassGrid;
-    tradeResults.LDpassGrid       = LDpassGrid;
-    tradeResults.bestTO           = bestTO;
-    tradeResults.bestLD           = bestLD;
-    tradeResults.deltaSweep       = deltaSweep;
-    tradeResults.modTOall         = modTOall;
-    tradeResults.modLDall         = modLDall;
-    tradeResults.baseTOall        = baseTOall;
-    tradeResults.baseLDall        = baseLDall;
-    tradeResults.alphaStall       = clean.alphaStall;
-    tradeResults.CLmax_clean      = clean.CLmax_W;
-    tradeResults.etaBeginFlap     = hl.etaBeginFlap;
-    tradeResults.etaEndFlap       = hl.etaEndFlap;
-    tradeResults.etaBeginSlat     = hl.etaBeginSlat;
-    tradeResults.etaEndSlat       = hl.etaEndSlat;
+    tradeResults.CLTOgrid            = CLTOgrid;
+    tradeResults.CLLDgrid            = CLLDgrid;
+    tradeResults.CL_op_TO_grid       = CL_op_TO_grid;
+    tradeResults.CL_op_LD_grid       = CL_op_LD_grid;
+    tradeResults.CLreqTOgrid         = CL_op_TO_grid;
+    tradeResults.CLreqLDgrid         = CL_op_LD_grid;
+    tradeResults.alphaTrimTO_grid    = alphaTrimTO_grid;
+    tradeResults.alphaTrimLD_grid    = alphaTrimLD_grid;
+    tradeResults.alphaTrimGrid       = alphaTrimTO_grid;
+    tradeResults.CLmaxGrid           = CLmaxGrid;
+    tradeResults.VSgrid              = VSgrid;
+    tradeResults.VLOFgrid            = VLOFgrid;
+    tradeResults.VAPPgrid            = VAPPgrid;
+
+    % NEW: flapped stall AOA grids
+    tradeResults.alphaStallGrid      = alphaStallGrid;
+    tradeResults.deltaCLw_grid       = deltaCLw_grid;
+    tradeResults.CLalphaFlappedGrid  = CLalphaFlappedGrid;
+    tradeResults.stallMarginTO_grid  = stallMarginTO_grid;
+    tradeResults.stallMarginLD_grid  = stallMarginLD_grid;
+
+    tradeResults.TOpassGrid          = TOpassGrid;
+    tradeResults.LDpassGrid          = LDpassGrid;
+    tradeResults.TOpassV_Grid        = TOpassV_Grid;   % speed-only pass
+    tradeResults.LDpassV_Grid        = LDpassV_Grid;
+    tradeResults.TOpassA_Grid        = TOpassA_Grid;   % AOA-only pass
+    tradeResults.LDpassA_Grid        = LDpassA_Grid;
+
+    tradeResults.bestTO              = bestTO;
+    tradeResults.bestLD              = bestLD;
+    tradeResults.deltaSweep          = deltaSweep;
+    tradeResults.modTOall            = modTOall;
+    tradeResults.modLDall            = modLDall;
+    tradeResults.baseTOall           = baseTOall;
+    tradeResults.baseLDall           = baseLDall;
+    tradeResults.alphaStall          = clean.alphaStall;   % clean-wing reference
+    tradeResults.CLmax_clean         = clean.CLmax_W;
+    tradeResults.etaBeginFlap        = hl.etaBeginFlap;
+    tradeResults.etaEndFlap          = hl.etaEndFlap;
+    tradeResults.etaBeginSlat        = hl.etaBeginSlat;
+    tradeResults.etaEndSlat          = hl.etaEndSlat;
 end
 
 % =====================================================================
-function [alpha_trim, modCL, cl_base, CL_integrated] = solveAlphaTrim( ...
+function [alpha_op, modCL, cl_base, CL_integrated] = solveAlphaTrim( ...
     CL_target, a_low, a_high, cl_low, cl_high, etaVec, sectionEta, ...
     deviceCfg, VSP)
 % Find alpha such that integrated (baseline_interp + device_increments) = CL_target.
@@ -244,10 +326,10 @@ function [alpha_trim, modCL, cl_base, CL_integrated] = solveAlphaTrim( ...
             alpha_hi = alpha_mid;
         end
     end
-    alpha_trim = alpha_mid;
+    alpha_op = alpha_mid;
 
     % Final evaluation with all outputs
-    cl_base = cl_low + (cl_high - cl_low) * (alpha_trim - a_low) / (a_high - a_low);
+    cl_base = cl_low + (cl_high - cl_low) * (alpha_op - a_low) / (a_high - a_low);
     modCL   = ModifiedCLDistro(cl_base, etaVec, sectionEta, deviceCfg);
     CL_integrated = ComputeCL(VSP.b, VSP.sRef, modCL, etaVec(:), VSP.cRef);
 end
@@ -289,19 +371,22 @@ end
 % =====================================================================
 function best = packBestConfig(i, j, deltaSweep, CLmaxGrid, VSgrid, ...
     VLOFgrid, VAPPgrid, CLopGrid, CLachGrid, alphaGrid, ...
+    alphaStallGrid, stallMarginGrid, ...
     modAll, baseAll, tag)
     if isempty(i)
         best = [];
         return;
     end
-    best.df        = deltaSweep(i);
-    best.ds        = deltaSweep(j);
-    best.CLmax     = CLmaxGrid(i, j);
-    best.VS        = VSgrid(i, j);
-    best.VLOF      = VLOFgrid(i, j);
-    best.VAPP      = VAPPgrid(i, j);
-    best.CL_op     = CLopGrid(i, j);
-    best.alphaTrim = alphaGrid(i, j);
+    best.df          = deltaSweep(i);
+    best.ds          = deltaSweep(j);
+    best.CLmax       = CLmaxGrid(i, j);
+    best.VS          = VSgrid(i, j);
+    best.VLOF        = VLOFgrid(i, j);
+    best.VAPP        = VAPPgrid(i, j);
+    best.CL_op       = CLopGrid(i, j);
+    best.alphaTrim   = alphaGrid(i, j);
+    best.alphaStall  = alphaStallGrid(i, j);   % flapped stall AOA
+    best.stallMargin = stallMarginGrid(i, j);
     if strcmp(tag, 'TO')
         best.CLTO   = CLachGrid(i, j);
         best.modTO  = modAll(:, i, j);

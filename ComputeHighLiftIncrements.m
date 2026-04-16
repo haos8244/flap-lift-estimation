@@ -15,6 +15,7 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
 %     - TE delta_cl_max table (stations x deflections)
 %     - LE delta_cl_max table (stations x deflections)
 %     - Flap/slat spanwise extent (eta begin/end)
+%     - Flapped lift-curve slope (Roskam Eq 8.28, p262)
 %
 %   These arrays are indexed by the trade study deflection vector.
 
@@ -76,6 +77,17 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
         hl.Swf_over_S = 0;
     end
 
+    %% (C_L_alpha_W)_delta — flapped lift-curve slope (Roskam Eq 8.28, p262)
+    %  (C_L_alpha_W)_delta = C_L_alpha_W * [ 1 + (c'/c - 1) * (S_wf/S) ]
+    %
+    %  Vector indexed by flap deflection (same length as hl.deltaSweep).
+    %  Slats are NOT included in this correction per Roskam §8.1.4.2 —
+    %  Eq 8.28 models the flap's chord extension effect on the clean-wing
+    %  slope. The slat's Delta-CL contribution is captured separately in
+    %  the Delta CL_w integration (Step 1 of Fig 8.58).
+    hl.CLalpha_flapped = clean.CLalpha_W .* ...
+        (1 + (hl.cPrimeOverC_flap - 1) .* hl.Swf_over_S);
+
     %% K_Delta — sweep correction on CLmax (Fig 8.55, p263)
     Lambda = ac.wing.Lambda_c4;
     hl.KDelta = (1 - 0.08 * cosd(Lambda)^2) * cosd(Lambda)^(3/4);
@@ -113,6 +125,12 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
         ac.flap.cfOverC, alphaDeltaCl_flap, hl.alphaDeltaRatio3D_flap, ac.wing.AR);
     fprintf('    Slat cf/c=%.2f -> alpha_delta_cl=%.4f -> ratio_3D=%.4f (at AR=%.1f)\n', ...
         ac.slat.cfOverC, alphaDeltaCl_slat, hl.alphaDeltaRatio3D_slat, ac.wing.AR);
+
+    fprintf('  [HighLift] Flapped Lift-Curve Slope (Roskam Eq 8.28)\n');
+    fprintf('    Swf/S = %.4f\n', hl.Swf_over_S);
+    fprintf('    Sampled (C_L_alpha_W)_delta:\n');
+    fprintf('      delta_f: '); fprintf('%7d ', hl.deltaSweep(1:5:end)); fprintf('deg\n');
+    fprintf('      /rad:    '); fprintf('%7.4f ', hl.CLalpha_flapped(1:5:end)); fprintf('\n');
 
     %% TE flap delta_cl_max table — Eq 8.18: k1 * k2 * k3 * dclmax_base
     %  Result: (nStations x nDefl) matrix
