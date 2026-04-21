@@ -28,14 +28,14 @@ function [ac] = AircraftConfig()
     airfoils.tc_pct  = [12, 12, 12, 10, 10, 6];      % thickness ratio [%]
 
     % At defined Reynolds number, shrinks as you go outboard (chord)!!!
-    airfoils.clAlpha = [6.0; 6.0; 6.0; 6.0; 6.0; 6.0];  % per rad
+    airfoils.clAlpha = [6.40; 6.40; 6.40; 6.30; 6.30; 6.00];  % per rad - taken from XFOIL (M = 0.2, Re approx 10^7)
     airfoils.clMax   = [1.81; 1.80; 1.79; 1.64; 1.61; 0.99];
 
     ac.airfoils = airfoils;
 
     %% Weights
     weights.WTO = 163800;                            % lb
-    weights.WLD = 163800 - (0.9 * 31600);            % lb (WTO - 90% fuel)
+    weights.WLD = 163800 - (0.8 * 31600);            % lb (WTO - 90% fuel)
 
     ac.weights = weights;
 
@@ -70,7 +70,7 @@ function [ac] = AircraftConfig()
 
     %% Takeoff and Landing Velocity Constraints - Limiting Factor
 
-    spdcnst.VLOFcnst = 150; % kts (knots)
+    spdcnst.VLOFcnst = 146; % kts (knots)
     spdcnst.VAPPcnst = 150; % kts (knots)
 
     ac.spdcnst = spdcnst;

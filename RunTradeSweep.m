@@ -24,8 +24,11 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
 %          - Speed:  V_LOF <= V_LOF_max,  V_APP <= V_APP_max
 %          - Stall:  alpha_op < alpha_stall_delta  (positive margin)
 %        Both must hold.
-%     7. Best config: among passing configs, pick the one with minimum
-%        total deflection (df + ds).  Clean aerodynamically.
+%     7. Best config selection:
+%          - Takeoff: minimize flap deflection first (drag penalty),
+%                     then minimize slat among ties.
+%          - Landing: minimize slat deflection first,
+%                     then minimize flap among ties (flap drag aids decel).
 
     deltaSweep = hl.deltaSweep;
     nDefl      = length(deltaSweep);
@@ -51,18 +54,18 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     VLOFgrid         = zeros(nDefl, nDefl);
     VAPPgrid         = zeros(nDefl, nDefl);
 
-    % NEW: flapped-stall-AOA grids (Roskam Fig 8.58 Step 4)
-    alphaStallGrid      = zeros(nDefl, nDefl);   % alpha_stall with devices
-    deltaCLw_grid       = zeros(nDefl, nDefl);   % vertical shift ΔCL_w
-    CLalphaFlappedGrid  = zeros(nDefl, nDefl);   % flapped slope (Eq 8.28)
-    stallMarginTO_grid  = zeros(nDefl, nDefl);   % alpha_stall_delta - alpha_op_TO
+    % Flapped-stall-AOA grids (Roskam Fig 8.58 Step 4)
+    alphaStallGrid      = zeros(nDefl, nDefl);
+    deltaCLw_grid       = zeros(nDefl, nDefl);
+    CLalphaFlappedGrid  = zeros(nDefl, nDefl);
+    stallMarginTO_grid  = zeros(nDefl, nDefl);
     stallMarginLD_grid  = zeros(nDefl, nDefl);
 
     TOpassGrid       = false(nDefl, nDefl);
     LDpassGrid       = false(nDefl, nDefl);
-    TOpassV_Grid     = false(nDefl, nDefl);      % speed only
+    TOpassV_Grid     = false(nDefl, nDefl);
     LDpassV_Grid     = false(nDefl, nDefl);
-    TOpassA_Grid     = false(nDefl, nDefl);      % AOA margin only
+    TOpassA_Grid     = false(nDefl, nDefl);
     LDpassA_Grid     = false(nDefl, nDefl);
 
     % Device config fixed fields
@@ -206,9 +209,11 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
         end
     end
 
-    % ---- Best config selection: minimum total deflection among passers ----
-    [bestTO_i, bestTO_j] = pickMinDeflection(TOpassGrid, deltaSweep);
-    [bestLD_i, bestLD_j] = pickMinDeflection(LDpassGrid, deltaSweep);
+    % ---- Best config selection ----
+    % Takeoff: minimize flap first (flaps produce more drag, bad for climb)
+    % Landing: minimize slat first (flap drag aids deceleration)
+    [bestTO_i, bestTO_j] = pickMinDeflection(TOpassGrid, deltaSweep, 'takeoff');
+    [bestLD_i, bestLD_j] = pickMinDeflection(LDpassGrid, deltaSweep, 'takeoff'); % using takeoff because unrealistic
 
     bestTO = packBestConfig(bestTO_i, bestTO_j, deltaSweep, ...
         CLmaxGrid, VSgrid, VLOFgrid, VAPPgrid, ...
@@ -223,7 +228,7 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
         modLDall, baseLDall, 'LD');
 
     if ~isempty(bestTO)
-        fprintf(['\n  >>> Best TO (min deflection): df=%d, ds=%d, ' ...
+        fprintf(['\n  >>> Best TO (min flap): df=%d, ds=%d, ' ...
                  'a_op=%.2f, a_stall=%.2f (margin %+.2f), V_LOF=%.1f kts\n'], ...
             bestTO.df, bestTO.ds, bestTO.alphaTrim, bestTO.alphaStall, ...
             bestTO.stallMargin, bestTO.VLOF*0.592484);
@@ -231,7 +236,7 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
         fprintf('\n  >>> No TO config passes (speed + stall margin)\n');
     end
     if ~isempty(bestLD)
-        fprintf(['  >>> Best LD (min deflection): df=%d, ds=%d, ' ...
+        fprintf(['  >>> Best LD (min slat): df=%d, ds=%d, ' ...
                  'a_op=%.2f, a_stall=%.2f (margin %+.2f), V_APP=%.1f kts\n\n'], ...
             bestLD.df, bestLD.ds, bestLD.alphaTrim, bestLD.alphaStall, ...
             bestLD.stallMargin, bestLD.VAPP*0.592484);
@@ -254,7 +259,7 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     tradeResults.VLOFgrid            = VLOFgrid;
     tradeResults.VAPPgrid            = VAPPgrid;
 
-    % NEW: flapped stall AOA grids
+    % Flapped stall AOA grids
     tradeResults.alphaStallGrid      = alphaStallGrid;
     tradeResults.deltaCLw_grid       = deltaCLw_grid;
     tradeResults.CLalphaFlappedGrid  = CLalphaFlappedGrid;
@@ -263,9 +268,9 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
 
     tradeResults.TOpassGrid          = TOpassGrid;
     tradeResults.LDpassGrid          = LDpassGrid;
-    tradeResults.TOpassV_Grid        = TOpassV_Grid;   % speed-only pass
+    tradeResults.TOpassV_Grid        = TOpassV_Grid;
     tradeResults.LDpassV_Grid        = LDpassV_Grid;
-    tradeResults.TOpassA_Grid        = TOpassA_Grid;   % AOA-only pass
+    tradeResults.TOpassA_Grid        = TOpassA_Grid;
     tradeResults.LDpassA_Grid        = LDpassA_Grid;
 
     tradeResults.bestTO              = bestTO;
@@ -275,7 +280,7 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
     tradeResults.modLDall            = modLDall;
     tradeResults.baseTOall           = baseTOall;
     tradeResults.baseLDall           = baseLDall;
-    tradeResults.alphaStall          = clean.alphaStall;   % clean-wing reference
+    tradeResults.alphaStall          = clean.alphaStall;
     tradeResults.CLmax_clean         = clean.CLmax_W;
     tradeResults.etaBeginFlap        = hl.etaBeginFlap;
     tradeResults.etaEndFlap          = hl.etaEndFlap;
@@ -343,27 +348,36 @@ function CL = evalCL(alpha, a_low, a_high, cl_low, cl_high, ...
 end
 
 % =====================================================================
-function [iBest, jBest] = pickMinDeflection(passGrid, deltaSweep)
-% Among passing configs, pick the one with smallest df+ds.
-% Ties broken by smallest df.
+function [iBest, jBest] = pickMinDeflection(passGrid, deltaSweep, mode)
+% Select best passing config based on drag philosophy:
+%   'takeoff' — minimize flap first (flap drag hurts climb), then slat
+%   'landing' — minimize slat first (flap drag aids deceleration), then flap
     [I, J] = find(passGrid);
     if isempty(I)
         iBest = []; jBest = [];
         return;
     end
-    totals = deltaSweep(I) + deltaSweep(J);
-    totals = totals(:);
-    [minSum, ~] = min(totals);
-    tiedMask = (totals == minSum);
+
+    if strcmp(mode, 'takeoff')
+        primary   = deltaSweep(I);   % minimize flap
+        secondary = deltaSweep(J);   % then minimize slat
+    else
+        primary   = deltaSweep(J);   % minimize slat
+        secondary = deltaSweep(I);   % then minimize flap
+    end
+
+    primary = primary(:);
+    [minVal, ~] = min(primary);
+    tiedMask = (primary == minVal);
     tiedIdx  = find(tiedMask);
+
     if length(tiedIdx) > 1
-        % Break ties by smaller df
-        dfs = deltaSweep(I(tiedIdx));
-        [~, subBest] = min(dfs);
+        [~, subBest] = min(secondary(tiedIdx));
         bestIdx = tiedIdx(subBest);
     else
         bestIdx = tiedIdx;
     end
+
     iBest = I(bestIdx);
     jBest = J(bestIdx);
 end
@@ -385,7 +399,7 @@ function best = packBestConfig(i, j, deltaSweep, CLmaxGrid, VSgrid, ...
     best.VAPP        = VAPPgrid(i, j);
     best.CL_op       = CLopGrid(i, j);
     best.alphaTrim   = alphaGrid(i, j);
-    best.alphaStall  = alphaStallGrid(i, j);   % flapped stall AOA
+    best.alphaStall  = alphaStallGrid(i, j);
     best.stallMargin = stallMarginGrid(i, j);
     if strcmp(tag, 'TO')
         best.CLTO   = CLachGrid(i, j);

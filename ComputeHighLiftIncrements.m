@@ -60,9 +60,9 @@ function [hl] = ComputeHighLiftIncrements(VSP, ac, roskam, clean, sectionEta)
     hl.cOverCref = VSP.cDistro ./ VSP.cRef;
 
     %% c'/c arrays for all deflections
-    %  Fowler: c'/c = 1 + cf/c * cos(delta_f)
-    hl.cPrimeOverC_flap = 1 + ac.flap.cfOverC .* cosd(hl.deltaSweep);
-    hl.cPrimeOverC_slat = 1 + ac.slat.cfOverC .* cosd(hl.deltaSweep);
+    %  Fowler: c'/c = 1 + cf/c * (1 - cos(delta_f))  [Roskam Fig 8.18]
+    hl.cPrimeOverC_flap = 1 + ac.flap.cfOverC .* (1 - cosd(hl.deltaSweep));
+    hl.cPrimeOverC_slat = 1 + ac.slat.cfOverC .* (1 - cosd(hl.deltaSweep));
 
     %% Swf/S — Ratio of flapped wing area to total wing reference area
     %  Integrate the chord distribution over the flap spanwise extent.
