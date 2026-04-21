@@ -120,7 +120,7 @@ function [tradeResults] = RunTradeSweep(VSP, ac, clean, hl, sectionEta)
             % --- Reference speeds (from CLmax + stall margin factors) ---
             VS   = sqrt(2 * ac.weights.WTO / (ac.atmo.density * VSP.sRef * CLmax));
             VLOF = 1.1  * VS;
-            VAPP = 1.23 * VS;
+            VAPP = 1.23 * VS + 5;
 
             % --- Operating CL at reference speeds ---
             CL_op_TO = 2 * ac.weights.WTO / ...

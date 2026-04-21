@@ -71,7 +71,7 @@ function [ac] = AircraftConfig()
     %% Takeoff and Landing Velocity Constraints - Limiting Factor
 
     spdcnst.VLOFcnst = 146; % kts (knots)
-    spdcnst.VAPPcnst = 150; % kts (knots)
+    spdcnst.VAPPcnst = 153; % kts (knots)
 
     ac.spdcnst = spdcnst;
 
